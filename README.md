@@ -13,9 +13,9 @@ SubView isn't on the Chrome Web Store. To install it:
 3. Click **Load unpacked** and choose the unzipped folder.
 4. Open a video page, click the SubView icon, and press the burst to turn it on for that site.
 
-Needs Chrome 119 or newer. To update, download the new zip, replace the folder's contents, and click **Reload** on SubView's card in `chrome://extensions`.
+Needs Chrome 119 or newer. Chrome doesn't update extensions installed this way, so the popup shows a yellow note at the bottom when a newer release is out. To update, download the new zip, replace the folder's contents, and click **Reload** on SubView's card in `chrome://extensions`.
 
-SubView collects nothing and has no servers; see [PRIVACY.md](PRIVACY.md). It doesn't download or save video or audio, and doesn't work with DRM-protected players.
+SubView collects nothing and has no servers. Its one outside request is that version check: at most once a day, when you open the popup, it asks GitHub for the latest release number. See [PRIVACY.md](PRIVACY.md). It doesn't download or save video or audio, and doesn't work with DRM-protected players.
 
 ## Local development
 
@@ -32,7 +32,7 @@ After rebuilding an already loaded extension, click **Reload** on its extension 
 
 ## Popup
 
-The popup (`src/popup/popup.*`) is the everyday control: one power button that turns Auto Dub on or off for the current site, a status line, a readout of the Dub **server** and where the audio comes from (hidden copy or minimized window), Dub volume, mute original audio, Dub timing (offset, in seconds) and auto offset. Settings apply live while a Dub plays in that tab and are saved for the site. The look is "Manga Pop" and follows the system theme: light is Classic Ink (yellow burst, pink lettering, blue buttons); dark swaps the roles (pink burst, yellow lettering). Fonts (Dela Gothic One, Zen Kaku Gothic New; SIL Open Font License, latin subsets) are bundled in `src/popup/fonts/`, so the popup loads nothing from the network. Design explorations are in `design/`.
+The popup (`src/popup/popup.*`) is the everyday control: one power button that turns Auto Dub on or off for the current site, a status line, a readout of the Dub **server** and where the audio comes from (hidden copy or minimized window), Dub volume, mute original audio, Dub timing (offset, in seconds) and auto offset. Settings apply live while a Dub plays in that tab and are saved for the site. The look is "Manga Pop" and follows the system theme: light is Classic Ink (yellow burst, pink lettering, blue buttons); dark swaps the roles (pink burst, yellow lettering). Fonts (Dela Gothic One, Zen Kaku Gothic New; SIL Open Font License, latin subsets) are bundled in `src/popup/fonts/`, so the popup page itself loads nothing from the network. The new-version note (`src/background/update-check.ts`, `src/shared/update.ts`) is fetched by the background worker, only for copies loaded from a folder. Design explorations are in `design/`.
 
 **Debug tools** (link at the bottom; `debug.html`) is the original full popup: manual background audio from a media URL, two-tab sync, tab and video pickers, language detection details and Scan again. `popup.html?tab=<id>` opens the popup for a specific tab (used by tests).
 

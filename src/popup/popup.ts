@@ -29,6 +29,7 @@ const ui = {
   autoOffset: element<HTMLButtonElement>("auto-offset"),
   error: element<HTMLParagraphElement>("error"),
   debug: element<HTMLButtonElement>("debug"),
+  update: element<HTMLButtonElement>("update"),
   mixer: document.querySelector<HTMLElement>(".mixer")!,
 };
 
@@ -251,6 +252,18 @@ for (const step of document.querySelectorAll<HTMLButtonElement>(".nudge-step")) 
 ui.power.addEventListener("click", () => void togglePower());
 ui.debug.addEventListener("click", () => void chrome.tabs.create({ url: chrome.runtime.getURL("debug.html") }));
 
+/** Copies loaded from a release zip don't update themselves; say when a newer one is out. */
+async function showUpdateNotice(): Promise<void> {
+  const response = await send({ type: "GET_UPDATE" });
+  const update = isRecord(response.update) ? response.update : null;
+  if (!update || typeof update.version !== "string" || typeof update.url !== "string") return;
+  const url = update.url;
+  ui.update.textContent = `v${update.version} is out · Get it ▸`;
+  ui.update.title = "Opens the download page. Replace this folder's files, then press Reload on SubView in chrome://extensions.";
+  ui.update.addEventListener("click", () => void chrome.tabs.create({ url }));
+  ui.update.hidden = false;
+}
+
 chrome.runtime.onMessage.addListener((message: unknown) => {
   if (!isRecord(message)) return false;
   if (message.type === "AUTO_DUB_UPDATE") {
@@ -277,4 +290,6 @@ void (async () => {
     render();
     showError(error);
   }
+  // Never in the way: a failed check just shows nothing.
+  void showUpdateNotice().catch(() => undefined);
 })();

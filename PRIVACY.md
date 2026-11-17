@@ -1,6 +1,6 @@
 # SubView — Video Sync: Privacy Policy
 
-Last updated: 17 November 2026
+Last updated: 17 November 2026 (added: checking for a new version)
 
 SubView is a browser extension that plays an alternate-language audio version of the video you are watching, in sync with that video.
 
@@ -8,12 +8,17 @@ SubView is a browser extension that plays an alternate-language audio version of
 
 Nothing. SubView does not collect, transmit, sell or share any information about you or your browsing. It has no servers, no accounts, no analytics and no ads.
 
+## Checking for a new version
+
+A copy installed from a release zip can't update itself. So when you open the popup, at most once a day, SubView asks GitHub for the number of its latest release (`api.github.com/repos/Jozeph-Zemambo/SubView/releases/latest`) and shows a note if a newer one is out. The request carries nothing about you, your settings or the sites you visit. Like any web request, GitHub sees the IP address it comes from.
+
 ## What SubView stores on your device
 
 To remember your choices, SubView saves the following in your browser's extension storage, on your device only:
 
 - the sites you turned SubView on for (the site's hostname);
 - for each of those sites: Dub volume, timing offset, whether the original audio is muted, whether auto offset is on, and the name of the Dub server that last worked or recently failed.
+- the latest release number GitHub reported, and when to ask again.
 
 While it is running, SubView also keeps the current playback state (which tab and video are being synced) in temporary session storage, which the browser clears when it closes.
 

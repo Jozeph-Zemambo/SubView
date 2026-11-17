@@ -41,6 +41,7 @@ import {
 } from "./offscreen-host";
 import "./language-detection-host";
 import { setupAutoDub } from "./auto-dub";
+import "./update-check";
 import { findHostedDub, findReplacementDub } from "./hosted-dub";
 import { closeHost, currentHost, HOSTED_TAB_ID, hostedFrames, refusedConnections, hostedRequest, isHostedSender, onHostedVideoEvent, onHostLost } from "./hosted-host";
 
