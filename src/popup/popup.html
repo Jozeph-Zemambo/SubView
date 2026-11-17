@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>SubView</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body data-state="loading">
+    <header class="top">
+      <p class="brand">Sub<i>View!</i></p>
+      <p class="site" id="site" title="">—</p>
+    </header>
+
+    <main>
+      <section class="hero" aria-label="Auto Dub">
+        <button id="power" class="burst" type="button" aria-pressed="false" aria-describedby="status">
+          <svg viewBox="0 0 200 200" aria-hidden="true">
+            <polygon points="100,8 118,52 162,26 146,72 194,78 152,104 186,142 138,138 140,188 106,154 82,194 72,148 26,170 48,128 6,108 52,90 22,46 72,58 78,12" />
+          </svg>
+          <span class="burst-text">
+            <span class="word" id="power-label">…</span>
+            <small id="tally-text">Loading</small>
+          </span>
+        </button>
+      </section>
+
+      <p class="bubble" id="status" role="status" aria-live="polite">Checking this tab…</p>
+
+      <section class="panels" aria-label="Now playing">
+        <div class="panel">
+          <small>Server</small>
+          <b id="server">—</b>
+        </div>
+        <div class="panel">
+          <small>Source</small>
+          <b id="source">—</b>
+        </div>
+      </section>
+
+      <section class="mixer" aria-label="Sound and timing">
+        <div class="control">
+          <label class="label" for="volume">Dub volume <output id="volume-out" for="volume">80%</output></label>
+          <input id="volume" class="slider" type="range" min="0" max="100" step="1" value="80" />
+        </div>
+
+        <div class="control row">
+          <span class="label" id="mute-label">Mute original audio</span>
+          <button id="mute" class="toggle" type="button" role="switch" aria-checked="true" aria-labelledby="mute-label"></button>
+        </div>
+
+        <div class="control row">
+          <span class="label" id="offset-label">Dub timing</span>
+          <div class="nudge" role="group" aria-labelledby="offset-label" aria-describedby="offset-hint">
+            <button type="button" class="nudge-step" data-step="-0.5" aria-label="Dub half a second earlier">−</button>
+            <label class="nudge-field"><input id="offset" type="number" step="0.1" value="0" inputmode="decimal" aria-label="Dub timing in seconds" /><span>s</span></label>
+            <button type="button" class="nudge-step" data-step="0.5" aria-label="Dub half a second later">+</button>
+          </div>
+        </div>
+        <p class="hint" id="offset-hint">Positive skips ahead in the Dub.</p>
+
+        <div class="control row">
+          <span class="label" id="auto-label">Auto offset <small>trims extra intro length</small></span>
+          <button id="auto-offset" class="toggle" type="button" role="switch" aria-checked="false" aria-labelledby="auto-label"></button>
+        </div>
+      </section>
+
+      <p class="error" id="error" role="alert" hidden></p>
+    </main>
+
+    <footer class="foot">
+      <button id="debug" class="link" type="button">Debug tools ▸</button>
+    </footer>
+
+    <script type="module" src="popup/popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SubView — Manga Pop variants</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=Zen+Kaku+Gothic+New:wght@500;900&family=Bangers&family=Rampart+One&family=Permanent+Marker&family=Fraunces:opsz,wght@9..144,900&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px 28px 60px; background: #cfcac2; color: #1b1b1b; font: 14px/1.5 "Zen Kaku Gothic New", system-ui, sans-serif; }
+  .page-head { max-width: 1480px; margin: 0 auto 26px; display: flex; flex-wrap: wrap; gap: 16px 32px; align-items: end; justify-content: space-between; }
+  .page-head h1 { margin: 0; font: 400 30px/1 "Dela Gothic One", sans-serif; letter-spacing: -0.01em; }
+  .page-head h1 i { color: #ff3b6b; font-style: normal; }
+  .page-head p { margin: 6px 0 0; color: #4a4640; max-width: 640px; }
+  .switcher { display: flex; gap: 6px; padding: 4px; border-radius: 999px; background: #111; }
+  .switcher button { border: 0; padding: 8px 16px; border-radius: 999px; background: transparent; color: #bbb; font: 900 13px/1 "Zen Kaku Gothic New", sans-serif; cursor: pointer; }
+  .switcher button[aria-pressed="true"] { background: #ffe14d; color: #111; }
+  .grid { max-width: 1480px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 30px; justify-items: center; }
+  figure { margin: 0; display: grid; gap: 12px; justify-items: center; }
+  figcaption { text-align: center; max-width: 340px; }
+  figcaption b { display: block; font: 400 18px/1.2 "Dela Gothic One", sans-serif; }
+  figcaption span { color: #4a4640; font-size: 12.5px; }
+  .tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 99px; background: #111; color: #fff; font: 900 10px/1.6 "Zen Kaku Gothic New"; letter-spacing: .1em; vertical-align: 3px; }
+  .tag.light { background: #fff; color: #111; border: 1.5px solid #111; }
+
+  /* ---------- the shared manga popup ---------- */
+  .mock {
+    --paper: #fffdf4; --ink: #111; --line: #111; --text: #111; --muted: #6b6560;
+    --accent: #ff3b6b; --burst: #fff; --burst-live: #ffe14d; --burst-find: #8ee8ff;
+    --panel: #fff; --dots: #111; --dots-opacity: .08; --shadow: #111; --chip: #8ee8ff;
+    --title-font: "Dela Gothic One"; --burst-font: "Dela Gothic One";
+    position: relative; width: 340px; overflow: hidden; padding: 16px 18px 16px;
+    background: var(--paper); color: var(--text);
+    border: 3px solid var(--line); border-radius: 6px;
+    font: 500 13px/1.4 "Zen Kaku Gothic New", sans-serif;
+    box-shadow: 0 30px 60px -20px rgba(0,0,0,.45);
+  }
+  .mock::before { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 0;
+    background-image: radial-gradient(var(--dots) 1.2px, transparent 1.4px); background-size: 9px 9px; opacity: var(--dots-opacity); }
+  .mock > * { position: relative; z-index: 1; }
+  .mock button { font: inherit; color: inherit; cursor: pointer; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .mock:not([data-state="off"]) [data-only="off"],
+  .mock:not([data-state="finding"]) [data-only="finding"],
+  .mock:not([data-state="live"]) [data-only="live"] { display: none !important; }
+
+  .top { display: flex; justify-content: space-between; align-items: center; }
+  .brand { font: 400 20px/1 var(--title-font), sans-serif; transform: skew(-6deg); }
+  .brand i { color: var(--accent); font-style: normal; }
+  .site { border: 2px solid var(--line); padding: 2px 8px; font: 900 11px/1.4 "Zen Kaku Gothic New"; background: var(--panel); box-shadow: 2px 2px 0 var(--shadow); }
+
+  .hero { display: grid; justify-items: center; padding: 16px 0 6px; position: relative; }
+  .burst { width: 172px; height: 172px; border: 0; padding: 0; background: transparent; position: relative; display: grid; place-items: center; transition: transform .15s; }
+  .burst svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+  .burst polygon { fill: var(--burst); stroke: var(--line); stroke-width: 4; stroke-linejoin: round; transition: fill .2s; }
+  .burst .word { position: relative; display: block; font: 400 27px/1 var(--burst-font), sans-serif; transform: rotate(-8deg); }
+  .burst small { position: relative; display: block; margin-top: 5px; font: 900 10px/1 "Zen Kaku Gothic New"; letter-spacing: .2em; transform: rotate(-8deg); }
+  .burst:active { transform: scale(.95) rotate(-2deg); }
+  .mock[data-state="live"] .burst polygon { fill: var(--burst-live); }
+  .mock[data-state="live"] .burst .word { color: var(--accent); -webkit-text-stroke: 1.5px var(--line); }
+  .mock[data-state="finding"] .burst svg { animation: wobble .35s ease-in-out infinite alternate; }
+  .mock[data-state="finding"] .burst polygon { fill: var(--burst-find); }
+
+  .bubble { position: relative; margin: 6px auto 14px; max-width: 272px; padding: 9px 12px; background: var(--panel); border: 2.5px solid var(--line); border-radius: 18px; text-align: center; }
+  .bubble::after { content: ""; position: absolute; top: -12px; left: 50%; width: 16px; height: 16px; background: var(--panel); border-left: 2.5px solid var(--line); border-top: 2.5px solid var(--line); transform: translateX(-50%) rotate(45deg); }
+
+  .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+  .panel { border: 2.5px solid var(--line); background: var(--panel); padding: 6px 9px; box-shadow: 3px 3px 0 var(--shadow); }
+  .panel small { display: block; font: 900 9.5px/1 "Zen Kaku Gothic New"; letter-spacing: .14em; color: var(--accent); }
+  .panel b { font: 400 15px/1.3 var(--title-font), sans-serif; }
+
+  .ctl { display: grid; gap: 10px; border: 2.5px solid var(--line); background: var(--panel); padding: 10px 12px; box-shadow: 3px 3px 0 var(--shadow); }
+  .slider { width: 100%; accent-color: var(--accent); }
+  .toggle { width: 40px; height: 22px; border: 2.5px solid var(--line); border-radius: 99px; background: var(--panel); position: relative; padding: 0; }
+  .toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--muted); transition: left .2s; }
+  .toggle.on { background: var(--burst-live); } .toggle.on::after { left: 20px; background: var(--accent); box-shadow: 0 0 0 2px var(--line); }
+  .nudge { display: flex; gap: 6px; width: 150px; }
+  .nudge button { width: 30px; border: 2.5px solid var(--line); background: var(--chip); font-weight: 900; box-shadow: 2px 2px 0 var(--shadow); }
+  .nudge span { flex: 1; text-align: center; border: 2.5px solid var(--line); background: var(--panel); font: 400 15px/1.6 var(--title-font); }
+  .foot { margin: 10px 0 0; text-align: right; font-weight: 900; font-size: 11px; }
+
+  /* =========== 1 · CLASSIC INK (light) =========== */
+  .classic { --paper: #fffaf0; }
+  .classic .hero::before { content: ""; position: absolute; top: 10px; left: 50%; width: 220px; height: 180px; transform: translateX(-50%); pointer-events: none;
+    background: radial-gradient(circle, #ff3b6b22 0 2px, transparent 2.5px) 0 0 / 12px 12px; mask: radial-gradient(circle, #000 30%, transparent 70%); }
+
+  /* =========== 2 · SHŌNEN COVER (light) =========== */
+  .shonen { --paper: #fff7ea; --accent: #e8202a; --burst: #fff; --burst-live: #e8202a; --burst-find: #ffd23f; --chip: #ffd23f; --title-font: "Bangers"; --burst-font: "Bangers"; }
+  .shonen .brand { font-size: 26px; letter-spacing: .04em; }
+  .shonen .hero { margin: 0 -18px; padding: 16px 18px 8px; overflow: hidden; }
+  .shonen .hero::before { content: ""; position: absolute; inset: -40px; pointer-events: none;
+    background: repeating-conic-gradient(from 0deg at 50% 52%, #111 0 1.2deg, transparent 1.2deg 7deg);
+    mask: radial-gradient(circle at 50% 52%, transparent 80px, #000 82px, #000 60%, transparent 75%); opacity: .55; }
+  .shonen[data-state="live"] .burst .word { color: #fff; -webkit-text-stroke: 2px #111; font-size: 34px; letter-spacing: .03em; }
+  .shonen .burst .word { font-size: 32px; letter-spacing: .03em; }
+  .shonen .top { border-bottom: 3px solid #111; padding-bottom: 8px; margin: -16px -18px 0; padding: 12px 18px 8px; background: #e8202a; color: #fff; }
+  .shonen .top .site { color: #111; }
+  .shonen .brand i { color: #ffd23f; }
+  .shonen .panel b, .shonen .nudge span { letter-spacing: .04em; font-size: 17px; }
+
+  /* =========== 3 · NIGHT INK (dark) =========== */
+  .night { --paper: #0d0d10; --ink: #f4f1ea; --line: #f4f1ea; --text: #f4f1ea; --muted: #8b8792; --accent: #ffe14d;
+    --burst: #0d0d10; --burst-live: #ffe14d; --burst-find: #6d5cff; --panel: #17171c; --dots: #f4f1ea; --dots-opacity: .07; --shadow: #ffe14d; --chip: #6d5cff; }
+  .night[data-state="live"] .burst .word { color: #0d0d10; -webkit-text-stroke: 0; }
+  .night[data-state="live"] .burst small { color: #0d0d10; }
+  .night .burst polygon { filter: drop-shadow(0 0 0 transparent); }
+  .night[data-state="live"] .burst polygon { filter: drop-shadow(0 0 14px #ffe14d88); }
+  .night .toggle.on::after { background: #0d0d10; box-shadow: 0 0 0 2px #f4f1ea; }
+  .night .site { box-shadow: 2px 2px 0 #ffe14d; }
+
+  /* =========== 4 · NOIR RED (dark) =========== */
+  .noir { --paper: #1b1918; --ink: #f1e7d6; --line: #f1e7d6; --text: #f1e7d6; --muted: #8a7f73; --accent: #ff2b2b;
+    --burst: #f1e7d6; --burst-live: #ff2b2b; --burst-find: #8a7f73; --panel: #24211f; --dots: #000; --dots-opacity: .55; --shadow: #000; --chip: #ff2b2b;
+    --title-font: "Permanent Marker"; --burst-font: "Permanent Marker"; border-color: #000; }
+  .noir::before { background-image: radial-gradient(#000 1.6px, transparent 1.8px); background-size: 6px 6px;
+    mask: linear-gradient(160deg, #000 0%, transparent 55%, #000 100%); }
+  .noir .brand { transform: rotate(-3deg); font-size: 22px; }
+  .noir .burst .word { color: #1b1918; font-size: 30px; }
+  .noir .burst small { color: #1b1918; }
+  .noir[data-state="live"] .burst .word { color: #f1e7d6; -webkit-text-stroke: 0; text-shadow: 2px 2px 0 #000; }
+  .noir[data-state="live"] .burst small { color: #f1e7d6; }
+  .noir .burst polygon { stroke: #000; stroke-width: 5; }
+  .noir .hero::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: 0; height: 18px; pointer-events: none;
+    background: linear-gradient(transparent 40%, #ff2b2b 40% 60%, transparent 60%); transform: rotate(-2deg); opacity: .8; }
+  .noir .panel, .noir .ctl, .noir .site, .noir .bubble { border-color: #000; }
+  .noir .bubble { background: #f1e7d6; color: #1b1918; } .noir .bubble::after { background: #f1e7d6; border-color: #000; }
+  .noir .toggle { border-color: #000; } .noir .toggle.on::after { background: #f1e7d6; box-shadow: 0 0 0 2px #000; }
+  .noir .nudge button { color: #f1e7d6; border-color: #000; } .noir .nudge span { border-color: #000; }
+
+  @keyframes wobble { from { transform: rotate(-4deg) scale(.98); } to { transform: rotate(4deg) scale(1.02); } }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+  <header class="page-head">
+    <div>
+      <h1>Manga Pop <i>×4</i></h1>
+      <p>Two light, two dark. Same popup contents in each; switch states, or click a burst to cycle it.</p>
+    </div>
+    <div class="switcher" role="group" aria-label="State">
+      <button data-set="off" aria-pressed="false">Off</button>
+      <button data-set="finding" aria-pressed="false">Finding</button>
+      <button data-set="live" aria-pressed="true">Live</button>
+    </div>
+  </header>
+
+  <main class="grid" id="grid"></main>
+
+  <template id="popup">
+    <div class="mock" data-state="live">
+      <div class="top"><span class="brand">Sub<i>View!</i></span><span class="site">example.tv</span></div>
+      <div class="hero">
+        <button class="burst" aria-label="Turn Auto Dub on or off">
+          <svg viewBox="0 0 200 200"><polygon points="100,8 118,52 162,26 146,72 194,78 152,104 186,142 138,138 140,188 106,154 82,194 72,148 26,170 48,128 6,108 52,90 22,46 72,58 78,12" /></svg>
+          <span>
+            <span class="word" data-only="off">OFF</span><span class="word" data-only="finding">...?!</span><span class="word" data-only="live">DUB!!</span>
+            <small data-only="off">TAP TO DUB</small><small data-only="finding">SEARCHING</small><small data-only="live">ON AIR</small>
+          </span>
+        </button>
+      </div>
+      <p class="bubble">
+        <span data-only="off">Sub plays as usual. Tap the burst to hear the Dub!</span>
+        <span data-only="finding">Loading Dub from the “alpha” server…</span>
+        <span data-only="live">Dub's playing in sync! Your tab stays on Sub.</span>
+      </p>
+      <div class="panels">
+        <div class="panel"><small>SERVER</small><b><span data-only="off">—</span><span data-only="finding">???</span><span data-only="live">alpha</span></b></div>
+        <div class="panel"><small>SOURCE</small><b><span data-only="off">—</span><span data-only="finding">hidden</span><span data-only="live">hidden</span></b></div>
+      </div>
+      <div class="ctl">
+        <label>Dub volume <input class="slider" type="range" value="80" /></label>
+        <div class="row"><span>Mute original audio</span><button class="toggle on" aria-label="Mute original audio"></button></div>
+        <div class="row"><span>Dub timing</span><div class="nudge"><button>−</button><span>+1.5s</span><button>+</button></div></div>
+        <div class="row"><span>Auto offset</span><button class="toggle" aria-label="Auto offset"></button></div>
+      </div>
+      <p class="foot">DEBUG TOOLS ▸</p>
+    </div>
+  </template>
+
+  <script>
+    const variants = [
+      ["classic", "Classic Ink", "light", "The original, refined: cream paper, yellow burst, pink accent, a soft screentone halo behind the button."],
+      ["shonen", "Shōnen Cover", "light", "Battle-manga cover: red title strip, Bangers lettering, speed lines radiating from the burst."],
+      ["night", "Night Ink", "dark", "Inverted manga: white linework on black, yellow shadows and an electric yellow burst. Easy on the eyes at night."],
+      ["noir", "Noir Red", "dark", "Gritty action manga: charcoal screentone, blood-red and cream, marker lettering and a red brush slash."],
+    ];
+    const grid = document.getElementById("grid");
+    const template = document.getElementById("popup");
+    for (const [cls, name, tone, note] of variants) {
+      const figure = document.createElement("figure");
+      const mock = template.content.firstElementChild.cloneNode(true);
+      mock.classList.add(cls);
+      figure.append(mock);
+      const caption = document.createElement("figcaption");
+      caption.innerHTML = `<b>${name}<span class="tag ${tone === "light" ? "light" : ""}">${tone.toUpperCase()}</span></b><span>${note}</span>`;
+      figure.append(caption);
+      grid.append(figure);
+    }
+    const buttons = document.querySelectorAll(".switcher button");
+    const set = state => {
+      document.querySelectorAll(".mock").forEach(mock => mock.dataset.state = state);
+      buttons.forEach(button => button.setAttribute("aria-pressed", String(button.dataset.set === state)));
+    };
+    buttons.forEach(button => button.addEventListener("click", () => set(button.dataset.set)));
+    document.querySelectorAll(".toggle").forEach(t => t.addEventListener("click", () => t.classList.toggle("on")));
+    const order = ["off", "finding", "live"];
+    document.querySelectorAll(".burst").forEach(b => b.addEventListener("click", event => {
+      const mock = event.currentTarget.closest(".mock");
+      mock.dataset.state = order[(order.indexOf(mock.dataset.state) + 1) % order.length];
+    }));
+  </script>
+</body>
+</html>

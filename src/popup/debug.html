@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SubView · Debug tools</title>
+    <link rel="stylesheet" href="debug.css" />
+  </head>
+  <body>
+    <main class="popup-shell">
+      <header class="app-header">
+        <h1>Video Sync</h1>
+        <p>Pair a visible video with background audio or another tab.</p>
+      </header>
+
+      <form id="sync-form" novalidate>
+        <fieldset id="configuration-fields">
+          <legend class="visually-hidden">Sync configuration</legend>
+
+          <section class="mode-section" aria-label="Mode">
+            <div class="field">
+              <label for="sync-mode">Mode</label>
+              <select id="sync-mode" name="syncMode">
+                <option value="background">Background audio</option>
+                <option value="two-tabs">Two tabs</option>
+              </select>
+            </div>
+          </section>
+
+          <section class="endpoint" aria-labelledby="primary-heading">
+            <h2 id="primary-heading">Primary</h2>
+
+            <div class="field">
+              <label for="primary-tab">Tab</label>
+              <select
+                id="primary-tab"
+                name="primaryTab"
+                aria-describedby="primary-tab-error"
+                required
+              >
+                <option value="">Loading tabs…</option>
+              </select>
+              <p id="primary-tab-error" class="field-error" hidden></p>
+            </div>
+
+            <div class="field">
+              <div class="label-row">
+                <label for="primary-video">Video</label>
+                <button
+                  id="primary-rescan"
+                  class="text-button"
+                  type="button"
+                  hidden
+                >
+                  Scan again
+                </button>
+              </div>
+              <select
+                id="primary-video"
+                name="primaryVideo"
+                aria-describedby="primary-video-message primary-video-error"
+                required
+                disabled
+              >
+                <option value="">Select a tab first</option>
+              </select>
+              <p
+                id="primary-video-message"
+                class="field-message"
+                aria-live="polite"
+              >
+                Choose a tab to detect videos.
+              </p>
+              <p id="primary-video-error" class="field-error" hidden></p>
+            </div>
+          </section>
+
+          <section
+            id="language-detection"
+            class="language-panel"
+            aria-labelledby="language-detection-heading"
+            aria-live="polite"
+            aria-busy="false"
+          >
+            <div class="language-panel-heading">
+              <h2 id="language-detection-heading">Language detection</h2>
+              <span id="language-detection-state" class="language-state">Unknown</span>
+            </div>
+            <p id="language-detection-summary" class="language-summary">
+              Choose a primary tab to check its language options.
+            </p>
+            <p id="language-detection-provider" class="language-meta" hidden></p>
+            <p id="language-detection-detail" class="language-meta" hidden></p>
+            <ul id="language-detection-candidates" class="language-candidates" hidden></ul>
+          </section>
+
+          <section
+            id="auto-dub-section"
+            class="auto-dub-panel"
+            aria-labelledby="auto-dub-heading"
+          >
+            <div class="auto-dub-heading">
+              <h2 id="auto-dub-heading">Auto Dub</h2>
+              <span id="auto-dub-state" class="auto-dub-state">Loading</span>
+            </div>
+            <p class="auto-dub-summary">
+              Turn it on for a site once. On every episode you watch there in Sub,
+              Auto Dub plays the Dub audio in sync from a hidden copy of the page.
+              Your tab stays on Sub.
+            </p>
+            <p
+              id="auto-dub-detail"
+              class="auto-dub-detail"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              Reading the current Auto Dub setting…
+            </p>
+            <div class="auto-dub-actions">
+              <button
+                id="auto-dub-action"
+                class="secondary-button auto-dub-action"
+                type="button"
+                disabled
+              >
+                Enable Auto Dub
+              </button>
+            </div>
+          </section>
+
+          <div id="swap-row" class="swap-row" hidden>
+            <button id="swap-tabs" class="secondary-button" type="button" disabled>
+              Swap tabs
+            </button>
+          </div>
+
+          <section
+            id="two-tab-secondary"
+            class="endpoint"
+            aria-labelledby="secondary-heading"
+            hidden
+          >
+            <h2 id="secondary-heading">Secondary</h2>
+
+            <div class="field">
+              <label for="secondary-tab">Tab</label>
+              <select
+                id="secondary-tab"
+                name="secondaryTab"
+                aria-describedby="secondary-tab-error"
+                required
+              >
+                <option value="">Loading tabs…</option>
+              </select>
+              <p id="secondary-tab-error" class="field-error" hidden></p>
+            </div>
+
+            <div class="field">
+              <div class="label-row">
+                <label for="secondary-video">Video</label>
+                <button
+                  id="secondary-rescan"
+                  class="text-button"
+                  type="button"
+                  hidden
+                >
+                  Scan again
+                </button>
+              </div>
+              <select
+                id="secondary-video"
+                name="secondaryVideo"
+                aria-describedby="secondary-video-message secondary-video-error"
+                required
+                disabled
+              >
+                <option value="">Select a tab first</option>
+              </select>
+              <p
+                id="secondary-video-message"
+                class="field-message"
+                aria-live="polite"
+              >
+                Choose a tab to detect videos.
+              </p>
+              <p id="secondary-video-error" class="field-error" hidden></p>
+            </div>
+          </section>
+
+          <section
+            id="background-secondary"
+            class="background-endpoint"
+            aria-labelledby="background-heading"
+          >
+            <h2 id="background-heading">Background audio</h2>
+
+            <div
+              id="background-playback"
+              class="background-playback"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              hidden
+            >
+              <div class="background-playback-heading">
+                <span>Playback</span>
+                <strong id="background-playback-mode">Hidden player</strong>
+              </div>
+              <p id="background-playback-detail">
+                Audio is playing without an extra tab.
+              </p>
+            </div>
+
+            <div id="source-url-field" class="field">
+              <label for="source-url">Source URL</label>
+              <input
+                id="source-url"
+                name="sourceUrl"
+                type="url"
+                inputmode="url"
+                autocomplete="url"
+                placeholder="https://example.com/audio.mp3"
+                aria-describedby="source-url-help source-url-error"
+                required
+              />
+              <p id="source-url-help" class="field-message">
+                Direct MP4, WebM, HLS (.m3u8), or audio URL. Page URLs won’t
+                play.
+              </p>
+              <p id="source-url-error" class="field-error" hidden></p>
+            </div>
+
+            <div class="field volume-field">
+              <div class="label-row">
+                <label for="background-volume">Volume</label>
+                <output id="volume-value" for="background-volume">80%</output>
+              </div>
+              <input
+                id="background-volume"
+                name="backgroundVolume"
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value="0.8"
+              />
+            </div>
+
+            <div class="field checkbox-field">
+              <label class="checkbox-control" for="mute-original">
+                <input
+                  id="mute-original"
+                  name="muteOriginal"
+                  type="checkbox"
+                  checked
+                  aria-describedby="mute-original-help"
+                />
+                <span>Mute original video</span>
+              </label>
+              <p id="mute-original-help" class="field-message">
+                Original sound is restored when sync stops.
+              </p>
+            </div>
+          </section>
+
+          <section class="offset-section" aria-labelledby="offset-heading">
+            <h2 id="offset-heading">Timing</h2>
+            <div class="field">
+              <label for="offset">Dub delay (hh:mm:ss.sss)</label>
+              <input
+                id="offset"
+                name="offset"
+                type="text"
+                value="+00:00:00"
+                placeholder="+00:00:00"
+                autocomplete="off"
+                spellcheck="false"
+                aria-describedby="offset-help offset-error"
+                required
+              />
+              <div class="offset-steps" role="group" aria-label="Adjust Dub delay" aria-describedby="offset-help">
+                <button type="button" class="secondary-button" data-offset-step="-5000" aria-label="Advance Dub 5 seconds">−5s</button>
+                <button type="button" class="secondary-button" data-offset-step="-1000" aria-label="Advance Dub 1 second">−1s</button>
+                <button type="button" class="secondary-button" data-offset-step="-100" aria-label="Advance Dub 0.1 seconds">−0.1s</button>
+                <button type="button" class="secondary-button" data-offset-step="100" aria-label="Delay Dub 0.1 seconds">+0.1s</button>
+                <button type="button" class="secondary-button" data-offset-step="1000" aria-label="Delay Dub 1 second">+1s</button>
+                <button type="button" class="secondary-button" data-offset-step="5000" aria-label="Delay Dub 5 seconds">+5s</button>
+              </div>
+              <p id="offset-help" class="field-message">
+                − advances Dub; + delays Dub. Sub keeps its position.
+              </p>
+              <p id="offset-error" class="field-error" hidden></p>
+            </div>
+            <div class="field checkbox-field timing-auto-field">
+              <label class="checkbox-control" for="auto-offset">
+                <input
+                  id="auto-offset"
+                  name="autoOffset"
+                  type="checkbox"
+                  aria-describedby="auto-offset-help auto-offset-effective"
+                />
+                <span>Auto offset</span>
+              </label>
+              <p id="auto-offset-help" class="field-message">
+                Skip the extra beginning of the longer video, then apply your timing correction.
+              </p>
+              <p
+                id="auto-offset-effective"
+                class="field-message formula"
+                role="status"
+                aria-live="polite"
+                hidden
+              ></p>
+            </div>
+          </section>
+
+        </fieldset>
+
+        <p id="action-error" class="action-error" hidden></p>
+
+        <div class="action-row">
+          <button id="start-sync" class="primary-button" type="submit">
+            <span>Start sync</span>
+            <span class="busy-indicator" aria-hidden="true"></span>
+          </button>
+          <button id="stop-sync" class="secondary-button" type="button" disabled>
+            <span>Stop sync</span>
+            <span class="busy-indicator" aria-hidden="true"></span>
+          </button>
+        </div>
+      </form>
+
+      <section class="status-area" aria-labelledby="status-heading">
+        <h2 id="status-heading" class="visually-hidden">Sync status</h2>
+        <div
+          id="sync-status"
+          class="status-content"
+          data-tone="neutral"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          <p id="status-label" class="status-label">Loading</p>
+          <p id="status-message" class="status-message">
+            Reading open tabs and current sync state…
+          </p>
+        </div>
+        <button id="retry-load" class="text-button status-action" type="button" hidden>
+          Try again
+        </button>
+      </section>
+    </main>
+
+    <script type="module" src="popup/debug.js"></script>
+  </body>
+</html>
