@@ -436,3 +436,50 @@ test('a Dub player that rebuilds its video is reconnected in place, without relo
   assert.equal(h.starts.at(-1).container, 'offscreen');
   assert.equal((await h.status()).status, 'active');
 });
+
+test('a hidden copy that opens on the viewer\'s language waits instead of failing or opening a window', async () => {
+  const h = harness();
+  // A player whose audio menu is closed: the visible tab can't say which language it is on.
+  h.sandbox.fixtureDetection = { ...h.sandbox.fixtureDetection, language: 'unknown', stateUnclear: true, audioControl: true, provider: null };
+  await h.enable();
+  await h.flush();
+  assert.equal(h.lookups.length, 1);
+  const already = new Error('This page is already playing audio in your language.');
+  already.name = 'AlreadyDubError';
+  h.lookups[0].reject(already);
+  await h.flush();
+  assert.equal(h.lookups.length, 1, 'no minimized-window attempt');
+  const waiting = await h.status();
+  assert.equal(waiting.status, 'waiting');
+  assert.match(waiting.reason, /already playing audio in your language/);
+  assert.equal(h.hostCloses() >= 1, true);
+
+  // The page still can't say: nothing is retried.
+  await h.change({ reason: 'media event' });
+  assert.equal(h.lookups.length, 1);
+
+  // The viewer opens the menu and it reads as the original language: Auto Dub starts.
+  await h.change({ language: 'sub', stateUnclear: undefined, reason: 'audio menu read' });
+  assert.equal(h.lookups.length, 2);
+  h.lookups[1].resolve(h.found(h.lookups[1].request));
+  await h.flush();
+  assert.equal((await h.status()).status, 'active');
+});
+
+test('a hidden copy whose page refused to play reports what the page said, without trying a window', async () => {
+  const h = harness();
+  await h.enable();
+  await h.flush();
+  const refused = new Error('The Dub player never loaded a playable episode. The page in the hidden copy says: “Stream Limit Reached”');
+  refused.name = 'HostedPageNoticeError';
+  h.lookups[0].reject(refused);
+  await h.flush();
+  assert.equal(h.lookups.length, 1, 'no minimized-window attempt');
+  const failed = await h.status();
+  assert.equal(failed.status, 'error');
+  assert.match(failed.reason, /Stream Limit Reached/);
+  assert.equal(h.hostCloses() >= 1, true);
+  // Not retried until the viewer asks.
+  await h.change({ reason: 'media event' });
+  assert.equal(h.lookups.length, 1);
+});

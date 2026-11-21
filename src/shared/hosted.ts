@@ -10,6 +10,10 @@ export type HostedRequest =
   /** force: click Dub even though the page never says which language is selected. */
   | { type: "SELECT_DUB"; force?: boolean }
   | { type: "LIST_PROVIDERS" }
+  /** Alerts and dialogs the page shows where its player is. */
+  | { type: "NOTICES" }
+  /** Debug tools: what this frame of the hidden copy contains. */
+  | { type: "DESCRIBE" }
   | { type: "SELECT_PROVIDER"; provider: string };
 
 export type HostedAgentMessage =

@@ -362,3 +362,61 @@ test("native media failure remains source-wide even with a pending playback comm
   assert.equal(messages.at(-1)?.event, "play-failed");
   assert.equal(messages.at(-1)?.commandId, undefined, "terminal media failure is not scoped to the older pending command");
 });
+
+// A player that only loads a new position when the seek comes through its own
+// timeline (see src/content/timeline-seek.ts).
+function timelinePlayer(video, loadedRanges) {
+  let loaded = loadedRanges;
+  video.buffered = { get length() { return loaded.length; }, start: index => loaded[index][0], end: index => loaded[index][1] };
+  const fired = [];
+  class FakeEvent { constructor(type) { this.type = type; } }
+  const timeline = {
+    max: "60.4", min: "0", disabled: false, current: "40",
+    ownerDocument: { defaultView: { FocusEvent: FakeEvent, PointerEvent: FakeEvent, MouseEvent: FakeEvent, Event: FakeEvent,
+      HTMLInputElement: { prototype: Object.defineProperty({}, "value", { set(value) { this.current = value; } }) } } },
+    dispatchEvent(event) {
+      fired.push(event.type);
+      // The page's player seeks when the drag is released, to the start of a 4 s segment.
+      if (event.type !== "pointerup") return;
+      const landed = Math.floor(Number(this.current) / 4) * 4;
+      loaded = [[landed, landed + 25]];
+      video._currentTime = landed;
+      video.dispatch("seeking");
+      video.dispatch("seeked");
+    },
+  };
+  const root = { querySelectorAll: selector => selector === 'input[type="range"]' ? [timeline] : [] };
+  video.getRootNode = () => root;
+  video.ownerDocument = root;
+  return { timeline, fired };
+}
+
+test("a seek to a position the player hasn't loaded goes through the page's timeline, then lands exactly", () => {
+  const { controller, video, messages } = setupVideo({ currentTime: 40, autoSeekEvents: false });
+  const { timeline, fired } = timelinePlayer(video, [[30, 55]]);
+  assert.equal(controller.applyCommand(command({ targetTimeMs: 10_500 })).ok, true);
+  assert.deepEqual(fired, ["focus", "pointerdown", "mousedown", "input", "change", "pointerup", "mouseup", "click"]);
+  assert.equal(timeline.current, "10.5");
+  // The timeline landed on 8 s; with that part loaded, the controller finished the seek itself.
+  assert.equal(video.currentTime, 10.5);
+  assert.equal(messages.some(message => message.event === "intent-seek"), false);
+  video.dispatch("seeking");
+  video.dispatch("seeked");
+  assert.equal(messages.at(-1)?.event, "remote-ack");
+  assert.equal(messages.some(message => message.event === "intent-seek"), false);
+});
+
+test("a seek inside what is loaded, or on a page without a timeline, is a plain seek", () => {
+  const loadedCase = setupVideo({ currentTime: 40 });
+  const { fired } = timelinePlayer(loadedCase.video, [[30, 55]]);
+  assert.equal(loadedCase.controller.applyCommand(command({ targetTimeMs: 45_000 })).ok, true);
+  assert.deepEqual(fired, []);
+  assert.equal(loadedCase.video.currentTime, 45);
+  assert.equal(loadedCase.messages.at(-1)?.event, "remote-ack");
+
+  const plain = setupVideo({ currentTime: 40 });
+  plain.video.buffered = { length: 1, start: () => 30, end: () => 55 };
+  assert.equal(plain.controller.applyCommand(command({ targetTimeMs: 10_500 })).ok, true);
+  assert.equal(plain.video.currentTime, 10.5);
+  assert.equal(plain.messages.at(-1)?.event, "remote-ack");
+});

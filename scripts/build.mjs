@@ -45,6 +45,8 @@ await build({
     // Registered only while Auto Dub hosts an episode page (background/hosted-host.ts).
     "hosted/hosted-shim": "src/hosted/hosted-shim.ts",
     "hosted/hosted-agent": "src/hosted/hosted-agent.ts",
+    // Registered only while hosted debug is on (background/hosted-diagnostics.ts).
+    "hosted/hosted-trail": "src/hosted/hosted-trail.ts",
   },
 });
 

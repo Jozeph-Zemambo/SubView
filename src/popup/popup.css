@@ -184,6 +184,8 @@ body[data-state="searching"] .burst svg { animation: wobble 0.35s ease-in-out in
 
 body[data-state="fault"] .burst polygon { fill: var(--burst-idle); stroke: var(--pink); stroke-dasharray: 10 6; }
 body[data-state="fault"] .word { color: var(--pink); }
+/* The explanation is the speech bubble right under the burst: make it the loud part. */
+body[data-state="fault"] .bubble { border-color: var(--pink); box-shadow: 3px 3px 0 var(--pink); text-align: left; }
 
 body:is([data-state="unavailable"], [data-state="loading"]) .burst { opacity: 0.5; }
 

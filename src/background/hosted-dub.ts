@@ -6,7 +6,7 @@ import {
   chooseDubVideo, nextProvider, providerFamily,
   type HostedVideoCandidate, type ProviderChoice,
 } from "../shared/hosted-selection";
-import { HOSTED_TAB_ID, hostedFrames, hostedRequest, onHostedChange, openHost, type HostedFrame } from "./hosted-host";
+import { guardSettingsWrites, HOSTED_TAB_ID, hostedFrames, hostedRequest, onHostedChange, openHost, type HostedFrame } from "./hosted-host";
 
 const PAGE_LOAD_TIMEOUT_MS = 30_000;
 const CONTROLS_TIMEOUT_MS = 20_000;
@@ -20,6 +20,32 @@ const NO_SWITCH_TIMEOUT_MS = 8_000;
 /** How long to let the hidden copy's Sub finish loading before switching it to Dub. */
 const SUB_SETTLE_TIMEOUT_MS = 12_000;
 const RECHECK_MS = 500;
+/** Opening a player menu and choosing from it takes longer than an ordinary request. */
+const SELECT_TIMEOUT_MS = 20_000;
+/** How long the settings guard outlives the press that needed it. */
+const SETTINGS_GUARD_MS = 6_000;
+/**
+ * An audio switch the control itself confirmed, with no new video load this
+ * long after it, happened in place: the same video now carries the Dub.
+ */
+const IN_PLACE_SETTLE_MS = 4_000;
+
+/**
+ * A player that is still starting can take the audio choice (and save it)
+ * without acting on it: pressed while its video had only metadata, one
+ * service saved the preference and never switched. Where the choice is an
+ * audio menu inside the player, the video must be able to play first
+ * (HAVE_FUTURE_DATA). No extra delay is needed beyond that.
+ */
+const PLAYABLE = 3;
+
+/** The hidden copy opened on audio in the viewer's language: there is no Sub to add Dub to. */
+export class AlreadyDubError extends Error {
+  constructor() {
+    super("This page is already playing audio in your language.");
+    this.name = "AlreadyDubError";
+  }
+}
 
 export interface HostedDubRequest {
   pageUrl: string;
@@ -100,10 +126,48 @@ function sameSite(href: string, pageUrl: string): boolean {
 }
 
 /**
+ * The page in the hidden copy refused to play and said why. Another container
+ * would be told the same thing, and on services that count streams it would
+ * use up one more.
+ */
+export class HostedPageNoticeError extends Error {
+  constructor(message: string, readonly notice: string) {
+    super(`${message} The page in the hidden copy says: “${notice}”`);
+    this.name = "HostedPageNoticeError";
+  }
+}
+
+const NOTICE_TIMEOUT_MS = 2_000;
+
+async function pageNotice(): Promise<string | null> {
+  const top = hostedFrames().find(frame => frame.depth === 1);
+  if (!top) return null;
+  try {
+    const response = ok(await hostedRequest(top.key, { type: "NOTICES" }, NOTICE_TIMEOUT_MS), "");
+    const [first] = Array.isArray(response.notices) ? response.notices : [];
+    return typeof first === "string" && first ? first : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Load the episode page into a hosted container, select Dub with the page's own
  * controls, and return its Dub video. Tries other servers when one never loads.
+ * A failure carries the page's own explanation when it shows one.
  */
 export async function findHostedDub(request: HostedDubRequest): Promise<HostedDubResult> {
+  try {
+    return await lookUpHostedDub(request);
+  } catch (error) {
+    if (request.signal.aborted || error instanceof AlreadyDubError) throw error;
+    const notice = await pageNotice();
+    if (!notice) throw error;
+    throw new HostedPageNoticeError(error instanceof Error ? error.message : String(error), notice);
+  }
+}
+
+async function lookUpHostedDub(request: HostedDubRequest): Promise<HostedDubResult> {
   const { pageUrl, signal } = request;
   const started = Date.now();
   request.onProgress(request.container === "offscreen"
@@ -117,6 +181,7 @@ export async function findHostedDub(request: HostedDubRequest): Promise<HostedDu
   let selectedAt = 0;
   let dubRequested = false;
   let forced = false;
+  let confirmedByControl = false;
   let options: ProviderChoice[] | null = null;
   let attemptDeadline = 0;
   let provider: string | null = null;
@@ -173,10 +238,21 @@ export async function findHostedDub(request: HostedDubRequest): Promise<HostedDu
       // Let Sub finish loading first: a lazy Sub player that starts just after
       // Dub is selected would otherwise look like a fresh Dub load.
       const subLoaded = chooseDubVideo(await candidates(), { since: 0, primaryDurationMs: request.primaryDurationMs });
-      if (!dubRequested && !subLoaded && Date.now() - topSeenAt < SUB_SETTLE_TIMEOUT_MS) {
+      const playerReady = detection.audioControl !== true || (subLoaded !== null && subLoaded.video.readyState >= PLAYABLE);
+      if (!dubRequested && (!subLoaded || !playerReady) && Date.now() - topSeenAt < SUB_SETTLE_TIMEOUT_MS) {
         request.onProgress("Waiting for the hidden copy to load…");
       } else if (!dubRequested) {
-        const response = ok(await hostedRequest(top.key, { type: "SELECT_DUB", force: unclear }), "Could not select Dub in the hidden page.");
+        const guarded = detection.audioControl === true;
+        if (guarded) await guardSettingsWrites(true);
+        let answer: unknown;
+        try {
+          answer = await hostedRequest(top.key, { type: "SELECT_DUB", force: unclear }, SELECT_TIMEOUT_MS);
+        } finally {
+          if (guarded) setTimeout(() => void guardSettingsWrites(false), SETTINGS_GUARD_MS);
+        }
+        if (isRecord(answer) && answer.already === true) throw new AlreadyDubError();
+        const response = ok(answer, "Could not select Dub in the hidden page.");
+        confirmedByControl = response.confirmed === true;
         dubRequested = true;
         forced = unclear;
         selectedAt = selectionTime(response);
@@ -204,7 +280,10 @@ export async function findHostedDub(request: HostedDubRequest): Promise<HostedDu
       }
 
       const all = await candidates();
-      const found = chooseDubVideo(all, { since: selectedAt, primaryDurationMs: request.primaryDurationMs });
+      const found = chooseDubVideo(all, { since: selectedAt, primaryDurationMs: request.primaryDurationMs }) ??
+        (confirmedByControl && Date.now() - selectedAt > IN_PLACE_SETTLE_MS && !all.some(candidate => candidate.loadedAt >= selectedAt)
+          ? chooseDubVideo(all, { since: 0, primaryDurationMs: request.primaryDurationMs })
+          : null);
       if (found) {
         return {
           pageUrl,

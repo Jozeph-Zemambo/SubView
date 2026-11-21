@@ -75,6 +75,43 @@ If the player won't start in the offscreen document, the same hosted page (same 
 
 Detection and selection are generic (native selects and semantic tab/radio controls), with no site hostnames or CSS classes. Inside hosted copies, visibility checks use attributes and computed style instead of layout boxes, since those documents never lay out.
 
+#### Players that choose audio by language
+
+Some services carry one episode with several audio languages instead of separate Sub and Dub versions: the player has a control named "Audio" whose options are languages ("Japanese", "English"). There, **Dub means audio in the browser's preferred language** and any other selected language counts as Sub. Nothing about a particular service is hard-coded; the pattern is the control's accessible name and roles (`src/content/language-detection.ts`, "audio chosen by language").
+
+- These menus usually exist only while open, and opening one in your tab would be visible. So your tab reports "can't tell" and the hidden copy opens the menu, reads it and chooses your language. If the copy turns out to be on your language already, Auto Dub waits ("already playing audio in your language") instead of failing; it starts once your own tab's menu has been seen on the original language, or on the next episode.
+- The control is found through a button named for audio, language or tracks, else through the player's settings button, and only inside an element the page names for its player (so a site's own interface-language menu is never mistaken for it). Players hide their control bar while idle; the button counts even then. A menu that turns out to hold no audio choice is closed again.
+- Audio description tracks ("English [AD]") are never chosen.
+- **Account settings stay yours.** Some services save the audio language to your account the moment it is chosen. While the hidden copy presses that control (and for 6 s after), its `PATCH` and `PUT` requests are dropped by a session rule scoped to the hidden container and the sites loaded in it (`guardSettingsWrites` in `hosted-host.ts`), so your next episode still opens in the language you chose. Requests that play video use other methods.
+- **In-place switches.** Where choosing a language swaps the sound without loading a new video, the usual proof ("a video that started loading after the choice") never arrives. The copy's own control showing your language selected, with no new load 4 s later, is accepted instead.
+
+**Checked on real services (2026-11-18, in a logged-in browser):**
+
+- *A service that gives each audio language its own address and saves the choice to the account.* Works in the hidden document: the copy-protected video loads there, the copy switches to the viewer's language with the account save blocked, and the Dub follows play, pause and seeks in both directions, staying within about 0.1–0.2 s. The viewer's tab stays on the original language and the account default is unchanged afterwards. It needs a plan that allows a second stream: on a one-stream plan the service answers the hidden copy with a "stream limit" message instead of a video.
+- *A service whose audio switches in place.* Does not work: its page script checks whether it is inside a frame and, if so, sends itself to an error screen. The hidden copy is a frame (in the offscreen document and in the fallback window alike), `window.top` can't be replaced, and this is the service's deliberate choice. Only a container that is a real top-level tab would get past it; that is not built.
+
+- **Press only once the player can play.** A player that is still starting can take the audio choice, and save it, without acting on it: pressed while its video had only metadata (about three seconds after the page started, as the player was fetching its licence), the first service above saved the preference and never switched. So where the choice is an audio menu inside the player, the hidden copy presses only once its video can play (`readyState` 3 or higher; `PLAYABLE` in `hosted-dub.ts`). No further delay is needed: in nine runs on the real service the press landed 183–208 ms after "can play" and the Dub was linked 3.7–6.9 s after Auto Dub was turned on. An earlier fixed 8 s wait is gone.
+- **Streams left behind.** Closing a hidden copy doesn't release its stream on the service's side at once. Six lookups within about three minutes got the next ones refused with the service's stream-limit message for a few minutes; a minute apart, three in a row were fine. Ordinary viewing, one episode after another, is far slower than that.
+
+#### When the page in the hidden copy refuses
+
+If a lookup fails and the page in the hidden copy is showing an alert or dialog where its player is ("Stream limit reached", "Not available in your region"), that text is added to the error: *The page in the hidden copy says: “…”*. Site-wide dialogs (cookie banners) don't count. In that case the minimized fallback window is not tried: it would be told the same thing, and on services that count streams it would use up one more.
+
+#### Seeking through the page's timeline
+
+Some players only load a new position when the seek comes through their own timeline: assign `currentTime` to a spot they haven't loaded and the video waits forever. When the target isn't loaded and the page has a standard timeline (one range input as long as the video), SubView seeks through that with the events a pointer drag produces, then finishes with an exact seek once the player has loaded around the target (`src/content/timeline-seek.ts`). Pages without such a timeline, and targets already loaded, get a plain seek as before.
+
+### Looking inside the hidden copy (Debug tools)
+
+A site that fails in the hidden copy usually fails for a reason only visible inside it. From the Debug tools page's console:
+
+```js
+await chrome.runtime.sendMessage({ type: "DESCRIBE_HOSTED" })                  // while a hidden copy is open
+await chrome.runtime.sendMessage({ type: "SET_HOSTED_DEBUG", enabled: true })  // then also record a trail
+```
+
+`DESCRIBE_HOSTED` returns, per frame of the copy: its address and title, the start of its text, its videos, the menus it has, what the detector reads, and any notice in the player area. With hosted debug on, the next hidden copy also loads `hosted/hosted-trail.js`, which records failed requests, script errors, the sockets and workers the page opens, and the call stack that started each navigation, carried across one page change. That is how the frame check above was found. It is off by default and wraps nothing in the page unless switched on (`src/background/hosted-diagnostics.ts`).
+
 Limits: cookies set by the copy (including HTTP `Set-Cookie`) and IndexedDB writes are not isolated; storage isolation covers `localStorage`, `sessionStorage` and `BroadcastChannel`. Sites that block framing in script (frame-busting), require a login that only a top-level tab can complete, or use DRM may fail in both containers; the popup reports the reason. Networks that filter streaming hosts affect Chrome traffic generally, not SubView specifically.
 
 ## Synchronization and two-tab fallback
@@ -99,8 +136,8 @@ Privileged Chrome pages and Safari packaging are not supported.
 ## Tests
 
 - `npm test`: unit tests (sync core, controller, detection host, Auto Dub coordinator, hosted video/server selection, offsets, HLS failure formatting).
-- `npm run test:hosted`: the built extension against a local site shaped like the hard live cases: a cross-origin player frame that refuses framing (`X-Frame-Options`/`frame-ancestors`), loads only once it is on screen and has painted, a language preference in `localStorage`, and other tabs that follow it through `storage` events. Checks that Dub is selected in the offscreen copy, the visible tab and its storage stay on Sub, drift stays small, seek/pause follow, and Disable removes the copy, its header rules and its scripts.
-- `npm run test:playback`, `test:hls`, `test:detection`, `test:auto-offset`: manual background audio, HLS decoding, detection/selection fixtures and offsets.
+- `npm run test:hosted`: two runs of the built extension against local sites. The second (`test/audio-language-hosted.e2e.mjs`) covers players that choose audio by language, in two shapes: a track menu that saves to the account and moves to another address, and a settings panel whose audio switches in place. It checks that the hidden copy chooses the viewer's language, that the account save never reaches the server, that the viewer's tab, address and localStorage are untouched, and that a page already on the viewer's language waits without opening a fallback window. The first run is a local site shaped like the hard live cases: a cross-origin player frame that refuses framing (`X-Frame-Options`/`frame-ancestors`), loads only once it is on screen and has painted, a language preference in `localStorage`, and other tabs that follow it through `storage` events. Checks that Dub is selected in the offscreen copy, the visible tab and its storage stay on Sub, drift stays small, seek/pause follow, and Disable removes the copy, its header rules and its scripts.
+- `npm run test:playback`, `test:hls`, `test:detection`, `test:auto-offset`: manual background audio, HLS decoding, detection/selection fixtures (including `test/audio-language.e2e.mjs` for audio-by-language menus) and offsets.
 - `npm run test:live -- <watchUrl> [subServer] [--quick]`: the built extension against a real site (headless, muted). It selects Sub (and a Sub server by value or family name), enables Auto Dub, then plays/seeks/pauses/changes speed while sampling drift through the worker's `subviewDiagnostics.sampleSyncDrift()`. Needs network and a site that is up; not part of `npm test`.
 
 Set `CHROMIUM_PATH` to a Chrome for Testing (or Chromium) executable for the browser tests. `playwright-core` does not download browsers.

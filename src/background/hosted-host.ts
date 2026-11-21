@@ -12,8 +12,12 @@ const REFERER_RULE_ID = 9101;
 const FRAME_HEADERS_RULE_ID = 9102;
 const EMBED_HEADERS_RULE_ID = 9103;
 const WORKER_FETCH_RULE_ID = 9104;
-const RULE_IDS = [REFERER_RULE_ID, FRAME_HEADERS_RULE_ID, EMBED_HEADERS_RULE_ID, WORKER_FETCH_RULE_ID];
+const SETTINGS_GUARD_RULE_ID = 9105;
+const RULE_IDS = [REFERER_RULE_ID, FRAME_HEADERS_RULE_ID, EMBED_HEADERS_RULE_ID, WORKER_FETCH_RULE_ID, SETTINGS_GUARD_RULE_ID];
 const SCRIPT_IDS = ["subview-hosted-shim", "subview-hosted-agent"];
+const TRAIL_SCRIPT_ID = "subview-hosted-trail";
+/** chrome.storage.local flag: record a debug trail inside hosted pages (see hosted/hosted-trail.ts). */
+export const HOSTED_DEBUG_KEY = "hostedDebug";
 const REQUEST_TIMEOUT_MS = 10_000;
 const RECONNECT_GRACE_MS = 3_000;
 
@@ -228,11 +232,14 @@ export async function hostedRequest(key: string, request: HostedRequest, timeout
 }
 
 async function registerScripts(): Promise<void> {
-  const existing = await chrome.scripting.getRegisteredContentScripts({ ids: SCRIPT_IDS });
+  const debug = (await chrome.storage.local.get(HOSTED_DEBUG_KEY).catch(() => ({})) as Record<string, unknown>)[HOSTED_DEBUG_KEY] === true;
+  const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [...SCRIPT_IDS, TRAIL_SCRIPT_ID] });
   // matchOriginAsFallback: about:blank/srcdoc/blob frames too, so a player (or a
   // clean storage handle) in such a frame can't escape the shim.
   const common = { matches: ["<all_urls>"], allFrames: true, matchOriginAsFallback: true, runAt: "document_start" as const, persistAcrossSessions: false };
   const scripts: chrome.scripting.RegisteredContentScript[] = [
+    // First, so it sees the page's real storage and functions before the shim replaces them.
+    ...(debug ? [{ ...common, id: TRAIL_SCRIPT_ID, js: ["hosted/hosted-trail.js"], world: "MAIN" as chrome.scripting.ExecutionWorld }] : []),
     { ...common, id: SCRIPT_IDS[0], js: ["hosted/hosted-shim.js"], world: "MAIN" as chrome.scripting.ExecutionWorld },
     { ...common, id: SCRIPT_IDS[1], js: ["hosted/hosted-agent.js"], world: "ISOLATED" as chrome.scripting.ExecutionWorld },
   ].filter(script => !existing.some(item => item.id === script.id));
@@ -337,11 +344,40 @@ async function allowFramesFrom(href: string): Promise<void> {
   });
 }
 
+/**
+ * Some services save the audio language to the viewer's account the moment it
+ * is chosen. While the hidden copy presses that control, its settings-changing
+ * requests (PATCH and PUT) are dropped, so the copy can switch language without
+ * changing what the viewer's own tabs open with next time. Scoped to the
+ * hosted container and the sites loaded in it; requests that play the video
+ * use other methods.
+ */
+export function guardSettingsWrites(on: boolean): Promise<void> {
+  return serialized(async () => {
+    const scope = on ? ruleScope : null;
+    await chrome.declarativeNetRequest.updateSessionRules({
+      removeRuleIds: [SETTINGS_GUARD_RULE_ID],
+      addRules: scope ? [{
+        id: SETTINGS_GUARD_RULE_ID,
+        priority: 2,
+        action: { type: "block" as chrome.declarativeNetRequest.RuleActionType },
+        condition: {
+          tabIds: scope.tabIds,
+          initiatorDomains: [...scope.initiators],
+          requestMethods: ["patch", "put"] as chrome.declarativeNetRequest.RequestMethod[],
+          resourceTypes: ["xmlhttprequest" as chrome.declarativeNetRequest.ResourceType],
+        },
+      }] : [],
+    });
+  }).catch(() => undefined);
+}
+
 /** Best effort: cleanup must never block stopping. */
 async function clearSessionArtifacts(): Promise<void> {
   ruleScope = null;
   try { await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: RULE_IDS }); } catch { /* None installed. */ }
   try { await chrome.scripting.unregisterContentScripts({ ids: SCRIPT_IDS }); } catch { /* None registered. */ }
+  try { await chrome.scripting.unregisterContentScripts({ ids: [TRAIL_SCRIPT_ID] }); } catch { /* Debug was off. */ }
 }
 
 /** Load the episode page into a fresh container. Replaces any existing container. */

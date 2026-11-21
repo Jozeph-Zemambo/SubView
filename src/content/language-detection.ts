@@ -370,6 +370,205 @@ async function followEpisode(doc: Document, episode: number, shown: Set<Element>
   }
 }
 
+// ---------- audio chosen by language ----------
+// Licensed services carry one episode with several audio languages instead of
+// separate Sub and Dub versions: a control named "Audio" whose options are
+// languages ("Japanese", "English"). Dub there is audio in the viewer's own
+// language; any other selected language is Sub.
+const AUDIO_GROUP = '[role="menu"],[role="listbox"],[role="radiogroup"],select';
+const AUDIO_OPTION = '[role="menuitemradio"],[role="option"],[role="radio"],option';
+const AUDIO_NAME = /\baudio\b/i;
+/** Audio description and commentary tracks are in a language but aren't the Dub. */
+const DESCRIPTIVE = /\[ad\]|\bad\b|audio descri|descriptive|commentary/i;
+/** Buttons that may hold the audio choice, most specific first; the last is a player's settings menu. */
+const AUDIO_TRIGGER_NAMES = [/\baudio\b/i, /\b(?:languages?|tracks?)\b/i, /\b(?:settings|preferences)\b/i];
+const MAX_AUDIO_TRIGGERS = 3;
+/** Containers a page names for its player: where player buttons and player messages live. */
+const PLAYER_AREA = '[id*="player" i],[class*="player" i],[id*="video" i],[class*="video" i]';
+
+/** A name the page gave the element itself; never its text content. */
+function explicitName(element: Element): string {
+  const ids = element.getAttribute('aria-labelledby')?.split(/\s+/) ?? [];
+  return clean([
+    element.getAttribute('aria-label'),
+    ...ids.map(id => element.ownerDocument.getElementById(id)?.textContent),
+    ...Array.from((element as HTMLSelectElement).labels ?? []).map(item => item.textContent),
+  ].join(' '));
+}
+
+/** Names of the languages the browser prefers, most preferred first: the code, its own name, its English name. */
+function viewerLanguages(): string[][] {
+  const preferred = typeof navigator === 'undefined' ? [] : navigator.languages?.length ? navigator.languages : [navigator.language];
+  const codes = [...new Set(preferred.filter(Boolean).map(code => code.toLowerCase().split('-')[0]))];
+  return (codes.length ? codes : ['en']).map(code => {
+    const names = new Set([code]);
+    for (const locale of [code, 'en']) {
+      try {
+        const name = new Intl.DisplayNames([locale], { type: 'language' }).of(code);
+        if (name) names.add(name.toLowerCase());
+      } catch { /* An unknown code keeps just itself. */ }
+    }
+    return [...names];
+  });
+}
+
+/** How preferred an option's language is to the viewer: 0 is best, -1 is not theirs. */
+function viewerRank(text: string, preferred: string[][]): number {
+  const value = text.toLowerCase();
+  return preferred.findIndex(names => names.some(name =>
+    value === name || (value.startsWith(name) && !/\p{L}/u.test(value.charAt(name.length)))));
+}
+
+function audioOptionText(option: Element): string {
+  return clean(option.textContent) || clean(option.getAttribute('aria-label'));
+}
+
+function chosen(option: Element): boolean {
+  return option instanceof HTMLOptionElement ? option.selected
+    : ['aria-checked', 'aria-selected'].some(attr => option.getAttribute(attr) === 'true');
+}
+
+interface AudioReading {
+  group: Element;
+  current: AvailableLanguage | null;
+  /** The option to press for Dub, when the episode has the viewer's language. */
+  dub: Element | null;
+}
+
+/** Audio-language controls that are rendered right now (many exist only while their menu is open). */
+function audioReadings(doc: Document): AudioReading[] {
+  const preferred = viewerLanguages();
+  return Array.from(doc.querySelectorAll(AUDIO_GROUP)).flatMap((group): AudioReading[] => {
+    if (!AUDIO_NAME.test(explicitName(group)) || !visible(group)) return [];
+    const options = Array.from(group.querySelectorAll(AUDIO_OPTION)).filter(option => enabled(option) && audioOptionText(option));
+    const selectedOptions = options.filter(chosen);
+    if (options.length < 2 || selectedOptions.length > 1) return [];
+    const ranked = options.map(option => ({ option, text: audioOptionText(option), rank: viewerRank(audioOptionText(option), preferred) }));
+    const mine = ranked.filter(item => item.rank >= 0 && !DESCRIPTIVE.test(item.text)).sort((a, b) => a.rank - b.rank);
+    // Regional variants ("Español (España)") share a rank: the plain name wins, else the first listed.
+    const best = mine.find(item => preferred[item.rank]?.includes(item.text.toLowerCase())) ?? mine[0] ?? null;
+    const selectedRank = selectedOptions.length ? viewerRank(audioOptionText(selectedOptions[0]), preferred) : null;
+    const current = selectedRank === null ? null : best && selectedRank === best.rank ? 'dub' : 'sub';
+    return [{ group, current, dub: best?.option ?? null }];
+  });
+}
+
+/** Buttons that may open the audio choice, best guess first. */
+function audioTriggers(doc: Document): Element[] {
+  return Array.from(doc.querySelectorAll('button,[role="button"]')).flatMap(element => {
+    if (!element.hasAttribute('aria-haspopup') && !element.hasAttribute('aria-expanded')) return [];
+    const name = explicitName(element);
+    const rank = AUDIO_TRIGGER_NAMES.findIndex(pattern => pattern.test(name));
+    // Not visible(): players hide their control bar while idle, and the button is still the way in.
+    // Inside the player only: a site's own "Language" menu is about the interface, not the audio.
+    if (rank < 0 || SERVER_NAME.test(name) || !element.isConnected || element.closest('[inert]') || !element.closest(PLAYER_AREA) ||
+        !enabled(element) || !inPlayerContext(element)) return [];
+    return [{ element, rank }];
+  }).sort((a, b) => a.rank - b.rank).slice(0, MAX_AUDIO_TRIGGERS).map(item => item.element);
+}
+
+// What the control said when it was last readable, per page address: closing
+// the menu removes the options, not the choice. Player controls also leave the
+// page while idle, so a trigger seen on this address still counts.
+let audioMemory: { href: string; current: AvailableLanguage; hasDub: boolean } | null = null;
+let audioTriggerSeenOn = '';
+
+interface AudioState {
+  current: AvailableLanguage | null;
+  hasDub: boolean;
+  element: Element | null;
+}
+
+function audioState(doc: Document): AudioState | null {
+  const href = doc.location?.href ?? doc.URL;
+  const readings = audioReadings(doc);
+  if (readings.length > 1) return null;
+  if (readings.length === 1) {
+    const [{ group, current, dub }] = readings;
+    const hasDub = Boolean(dub);
+    if (current) audioMemory = { href, current, hasDub };
+    return { current, hasDub, element: group };
+  }
+  const [trigger] = audioTriggers(doc);
+  if (trigger) audioTriggerSeenOn = href;
+  else if (audioTriggerSeenOn !== href || !doc.body || !playersIn(doc.body).length) return null;
+  if (audioMemory?.href === href) return { current: audioMemory.current, hasDub: audioMemory.hasDub, element: trigger ?? null };
+  // Closed and never read: the hidden copy opens it to find out.
+  return { current: null, hasDub: true, element: trigger ?? null };
+}
+
+/** Debug tools: the audio controls as they are right now. */
+export function describeAudioControls(doc: Document): unknown {
+  const state = (element: Element) => {
+    const marks: string[] = [];
+    for (let item: Element | null = element; item && item !== doc.body; item = item.parentElement) {
+      for (const attr of ["data-state", "aria-hidden", "hidden", "inert"]) if (item.hasAttribute(attr)) marks.push(`${attr}=${item.getAttribute(attr) || "true"}`);
+      const style = doc.defaultView?.getComputedStyle(item);
+      if (style?.display === "none") marks.push("display:none");
+      if (style?.visibility === "hidden") marks.push("visibility:hidden");
+    }
+    return [...new Set(marks)].join(" ") || "plain";
+  };
+  return {
+    triggers: audioTriggers(doc).map(trigger => ({ name: explicitName(trigger), expanded: trigger.getAttribute("aria-expanded"), state: state(trigger) })),
+    groups: Array.from(doc.querySelectorAll(AUDIO_GROUP)).filter(group => AUDIO_NAME.test(explicitName(group))).map(group => ({
+      name: explicitName(group),
+      readable: visible(group),
+      state: state(group),
+      options: Array.from(group.querySelectorAll(AUDIO_OPTION)).slice(0, 6).map(option => `${audioOptionText(option)}${chosen(option) ? "*" : ""}`),
+    })),
+    animations: typeof doc.getAnimations === "function" ? doc.getAnimations().length : null,
+  };
+}
+
+const AUDIO_OPEN_CLICK_MS = 1_500;
+const AUDIO_OPEN_PRESS_MS = 2_500;
+/** How long the control gets to show the new choice before it counts as unconfirmed. */
+const AUDIO_CONFIRM_MS = 600;
+
+export const ALREADY_DUB_ERROR = "This page is already playing audio in your language.";
+
+/**
+ * Hosted pages only: open the player's audio menu if needed and choose the
+ * viewer's language. `confirmed` says the control itself then showed that
+ * choice, which is the only evidence when the audio switches in place without
+ * loading a new video. `already` means nothing needed choosing.
+ */
+async function selectFromAudioControl(doc: Document): Promise<{ ok: boolean; error?: string; at?: number; confirmed?: boolean; already?: boolean }> {
+  const read = () => { const found = audioReadings(doc); return found.length === 1 ? found[0] : null; };
+  const until = async (ms: number) => { for (const started = Date.now(); !read() && Date.now() - started < ms;) await sleep(100); return read(); };
+  const escape = (element: Element) => element.dispatchEvent(new (doc.defaultView?.KeyboardEvent ?? KeyboardEvent)('keydown', { key: 'Escape', bubbles: true }));
+  let reading = read();
+  for (const trigger of reading ? [] : audioTriggers(doc)) {
+    // Click-openers first: a full press would toggle them twice.
+    (trigger as HTMLElement).click();
+    reading = await until(AUDIO_OPEN_CLICK_MS);
+    if (!reading) { press(trigger); reading = await until(AUDIO_OPEN_PRESS_MS); }
+    if (reading) break;
+    escape(trigger); // A settings menu without an audio choice: leave it closed.
+  }
+  if (!reading) return selectionError('The player showed no audio language choice.');
+  if (reading.current === 'dub') return { ok: false, error: ALREADY_DUB_ERROR, already: true };
+  if (!reading.dub) return selectionError('This episode has no audio in your language.');
+  const at = Date.now();
+  if (reading.dub instanceof HTMLOptionElement) {
+    const select = reading.dub.closest('select');
+    if (!select) return selectionError('The audio choice is not a usable control.');
+    select.value = reading.dub.value;
+    select.selectedIndex = reading.dub.index;
+    const EventConstructor = doc.defaultView?.Event ?? Event;
+    select.dispatchEvent(new EventConstructor('input', { bubbles: true }));
+    select.dispatchEvent(new EventConstructor('change', { bubbles: true }));
+  } else {
+    press(reading.dub);
+  }
+  let confirmed = false;
+  for (const started = Date.now(); !confirmed && Date.now() - started < AUDIO_CONFIRM_MS; await sleep(100)) confirmed = read()?.current === 'dub';
+  // A stale "Sub" must not outlive the press; an address change forgets it anyway.
+  audioMemory = confirmed ? { href: doc.location?.href ?? doc.URL, current: 'dub', hasDub: true } : null;
+  return { ok: true, at, confirmed };
+}
+
 interface RecognizedOption {
   option: HTMLOptionElement;
   language: AvailableLanguage;
@@ -582,12 +781,13 @@ export function selectSub(doc: Document): { ok: boolean; error?: string } {
  * says which language is selected; the caller must then confirm the switch by
  * seeing a new video load.
  */
-export async function selectDubInteractive(doc: Document, force = false): Promise<{ ok: boolean; error?: string; at?: number }> {
+export async function selectDubInteractive(doc: Document, force = false): Promise<{ ok: boolean; error?: string; at?: number; confirmed?: boolean; already?: boolean }> {
   // Standard controls first (a native select); an error here clicked nothing.
   const standard = selectLanguage(doc, 'dub');
   if (standard.ok) return standard;
   if (languagePopups(doc).length) return selectFromPopup(doc, 'dub');
   if (menuButtons(doc).length) return selectFromMenuButton(doc, 'dub');
+  if (detectLanguage(doc).audioControl) return selectFromAudioControl(doc);
   return force ? selectLanguage(doc, 'dub', true) : standard;
 }
 
@@ -726,6 +926,25 @@ export function selectProvider(doc: Document, provider: string): { ok: boolean; 
   }
 }
 
+const NOTICE = '[role="alert"],[role="alertdialog"],[role="dialog"],dialog[open]';
+const MAX_NOTICE_LENGTH = 220;
+
+/**
+ * What the page is telling the viewer where its player is: an alert or dialog
+ * inside the player area ("Stream limit reached", "Not available in your
+ * region"). Site-wide dialogs (cookie banners, sign-up prompts) don't count.
+ */
+export function pageNotices(doc: Document): string[] {
+  const found = new Set<string>();
+  for (const element of Array.from(doc.querySelectorAll(NOTICE))) {
+    if (!element.closest(PLAYER_AREA) || !visible(element)) continue;
+    // The message without its buttons ("Try again"), one space between its parts.
+    const text = textWithout(element, 'button,a,[role="button"]');
+    if (text.length >= 8) found.add(text.length > MAX_NOTICE_LENGTH ? `${text.slice(0, MAX_NOTICE_LENGTH)}…` : text);
+  }
+  return [...found].slice(0, 2);
+}
+
 function candidate(raw: string | null, base: string, text: string): DubCandidate | null {
   // Values such as "dub" or provider IDs are not relative media/page URLs.
   if (!raw || !/^(?:https?:\/\/|\/|\.\.?\/|\?)/i.test(raw.trim())) return null;
@@ -822,6 +1041,20 @@ export function detectLanguage(doc: Document): LanguageDetection {
     }
   }
 
+  // Last, and only when the page has no Sub/Dub control at all: audio by language.
+  let audioUnread = false;
+  if (!available.size) {
+    const audio = audioState(doc);
+    if (audio) {
+      result.audioControl = true;
+      audioUnread = audio.current === null;
+      if (audio.current && audio.element) add(audio.element, audio.current, true, null);
+      else if (audio.current) { available.add(audio.current); active.add(audio.current); }
+      available.add('sub');
+      if (audio.hasDub) available.add('dub');
+    }
+  }
+
   if (!providers.size) {
     const servers = activeServerRow(doc);
     if (servers?.current) providers.add(serverLabel(servers.current));
@@ -842,7 +1075,9 @@ export function detectLanguage(doc: Document): LanguageDetection {
     result.available = ['sub', 'dub'];
     result.reason = 'Selected language is named in the page address.';
   } else if (available.size) {
-    result.reason = 'Sub/Dub options exist, but no unambiguous selected state is exposed.';
+    result.reason = audioUnread
+      ? 'This player chooses audio by language in a menu; SubView reads it in its hidden copy.'
+      : 'Sub/Dub options exist, but no unambiguous selected state is exposed.';
     if (available.has('sub') && available.has('dub')) result.stateUnclear = true;
   }
   return result;
@@ -869,7 +1104,7 @@ export function observeLanguage(doc: Document, callback: (result: LanguageDetect
   };
   const relevant = (node: Node): boolean => {
     const element = node.nodeType === 1 ? node as Element : node.parentElement;
-    return Boolean(element && (element.matches(`${CONTROL},${POPUP},${PLAYER},option,label`) || element.closest(`${CONTROL},${POPUP}`) || element.querySelector(`${CONTROL},${POPUP},${PLAYER}`)));
+    return Boolean(element && (element.matches(`${CONTROL},${POPUP},${PLAYER},${AUDIO_GROUP},${AUDIO_OPTION},option,label`) || element.closest(`${CONTROL},${POPUP},${AUDIO_GROUP}`) || element.querySelector(`${CONTROL},${POPUP},${PLAYER},${AUDIO_GROUP}`)));
   };
   const observer = new MutationObserver(records => {
     if (records.some(record => relevant(record.target) || [...record.addedNodes, ...record.removedNodes].some(relevant))) schedule();

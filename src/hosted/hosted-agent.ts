@@ -5,7 +5,7 @@
 import { HOSTED_PORT, type HostedAgentMessage, type HostedRequest, type HostedWorkerMessage } from "../shared/hosted";
 import { isRecord } from "../shared/messages";
 import type { ContentEventMessage, VideoDescriptor } from "../shared/types";
-import { detectLanguage, listProviders, selectDubInteractive, selectProvider, useLayoutIndependentVisibility } from "../content/language-detection";
+import { describeAudioControls, detectLanguage, listProviders, pageNotices, selectDubInteractive, selectProvider, useLayoutIndependentVisibility } from "../content/language-detection";
 import { VideoController } from "../content/video-controller";
 import { findVideoById, getVideoId, probeVideos } from "../content/video-probe";
 
@@ -71,6 +71,33 @@ function isolated(): boolean {
       }
       case "LIST_PROVIDERS":
         return listProviders(document);
+      case "NOTICES":
+        return { ok: true, notices: pageNotices(document) };
+      case "DESCRIBE": {
+        const squash = (text: string | null | undefined) => (text ?? "").replace(/\s+/g, " ").trim();
+        // The page-world shim keeps the trail; events are the only bridge between the two worlds.
+        let trail: unknown = [];
+        document.addEventListener("subview-trail", event => {
+          try { trail = JSON.parse((event as CustomEvent<string>).detail); } catch { /* No trail. */ }
+        }, { once: true });
+        document.dispatchEvent(new CustomEvent("subview-trail-request"));
+        return {
+          ok: true,
+          href: location.href,
+          title: document.title,
+          isolated: isolated(),
+          text: squash(document.body?.textContent).slice(0, 400),
+          videos: probe().map(video => ({ id: video.id, readyState: video.readyState, durationMs: video.durationMs, currentTimeMs: video.currentTimeMs, paused: video.paused, source: Boolean(video.source), loadStartedAt: video.loadStartedAt ?? null })),
+          frames: Array.from(document.querySelectorAll("iframe")).map(frame => squash(frame.getAttribute("src")).slice(0, 120)),
+          menus: Array.from(document.querySelectorAll('button,[role="button"]'))
+            .filter(element => element.hasAttribute("aria-haspopup") || element.hasAttribute("aria-expanded"))
+            .map(element => squash(element.getAttribute("aria-label") || element.textContent).slice(0, 60)).slice(0, 20),
+          detection: detectLanguage(document),
+          notices: pageNotices(document),
+          audio: describeAudioControls(document),
+          trail,
+        };
+      }
       case "SELECT_PROVIDER": {
         if (!isolated()) return { ok: false, error: ISOLATION_ERROR };
         const at = Date.now();

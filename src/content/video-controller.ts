@@ -12,6 +12,7 @@ import type {
   VideoDescriptor,
   VideoCommand,
 } from "../shared/types";
+import { isBuffered, pageTimeline, seekThroughTimeline } from "./timeline-seek";
 import { findVideoById, probeVideos } from "./video-probe";
 
 const MEDIA_EVENT_NAMES = [
@@ -34,6 +35,10 @@ const MEDIA_EVENT_NAMES = [
 type MediaEventName = (typeof MEDIA_EVENT_NAMES)[number];
 
 const TIME_MATCH_EPSILON_MS = 1;
+/** How long a seek through the page's timeline gets to start before a direct seek replaces it. */
+const TIMELINE_SEEK_TIMEOUT_MS = 1_500;
+/** A timeline seek counts as having moved the video when it lands this close to the target. */
+const TIMELINE_LANDING_S = 3;
 const RATE_MATCH_EPSILON = 0.000001;
 
 export interface ContentControllerResponse {
@@ -162,6 +167,8 @@ export class VideoController {
   private lastCommandId: string | null = null;
   private localSequence = 0;
   private userSeeking = false;
+  /** Target of a seek sent through the page's own timeline, until it lands. */
+  private timelineSeekMs: number | null = null;
   private readonly handlePageHide = (): void => {
     // A frame leaving its document loses the selected endpoint even when its
     // parent tab does not navigate. Release mute and stop its hidden partner.
@@ -227,6 +234,7 @@ export class VideoController {
     this.lastCommandRevision = null;
     this.lastCommandId = null;
     this.userSeeking = false;
+    this.timelineSeekMs = null;
     this.attachActiveElement(found);
     return this.activationResponse();
   }
@@ -306,6 +314,7 @@ export class VideoController {
     this.lastCommandRevision = null;
     this.lastCommandId = null;
     this.userSeeking = false;
+    this.timelineSeekMs = null;
     return { ok: true, pairId };
   }
 
@@ -596,6 +605,16 @@ export class VideoController {
         // seek is still active. Wait for the native completion that observes
         // the settled currentTime.
         if (video.seeking) return;
+        if (this.timelineSeekMs !== null) {
+          // The timeline lands on its own step or a segment start. Now that the
+          // player has loaded around the target, finish with an exact seek.
+          const targetMs = this.timelineSeekMs;
+          this.timelineSeekMs = null;
+          if (Math.abs(snapshot.currentTimeMs - targetMs) > TIME_MATCH_EPSILON_MS && isBuffered(video, targetMs / 1000)) {
+            video.currentTime = targetMs / 1000;
+            return;
+          }
+        }
         this.userSeeking = false;
         const acknowledgement = this.acknowledgeExpected("time", snapshot);
         if (acknowledgement.matched) {
@@ -748,7 +767,7 @@ export class VideoController {
     }
 
     if (expected.timePending && expected.expectedTimeMs !== null) {
-      video.currentTime = expected.expectedTimeMs / 1000;
+      this.seek(video, expected.expectedTimeMs);
     }
 
     const afterSeek = mediaSnapshot(video);
@@ -764,6 +783,30 @@ export class VideoController {
     }
 
     expected.readyToClear = true;
+  }
+
+  /**
+   * Move the video. A position the player hasn't loaded goes through the
+   * page's own timeline when it has one (see timeline-seek.ts); everything
+   * else, and every page without one, is a plain currentTime assignment.
+   */
+  private seek(video: HTMLVideoElement, targetMs: number): void {
+    const seconds = targetMs / 1000;
+    const timeline = isBuffered(video, seconds) ? null : pageTimeline(video);
+    if (!timeline) {
+      this.timelineSeekMs = null;
+      video.currentTime = seconds;
+      return;
+    }
+    this.timelineSeekMs = targetMs;
+    seekThroughTimeline(timeline, seconds);
+    // A timeline that ignores scripted input leaves the video where it was.
+    setTimeout(() => {
+      if (this.timelineSeekMs !== targetMs || this.activeSelection?.element !== video) return;
+      if (video.seeking || Math.abs(video.currentTime - seconds) <= TIMELINE_LANDING_S) return;
+      this.timelineSeekMs = null;
+      video.currentTime = seconds;
+    }, TIMELINE_SEEK_TIMEOUT_MS);
   }
 
   private resumePendingCommand(

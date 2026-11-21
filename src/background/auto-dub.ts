@@ -22,6 +22,7 @@ const SITES_KEY = "autoDubSites";
 const DUB_START_TIMEOUT_MS = 15_000;
 /** The visible tab turning to Dub this soon after the hidden copy chose Dub means the setting leaked. */
 const LEAK_WINDOW_MS = 20_000;
+const ALREADY_DUB_REASON = "This page is already playing audio in your language. Auto Dub starts when you switch the audio back to the original language.";
 const LEAK_REASON = "Your tab switched to Dub right after the hidden copy selected Dub, so this site shares the setting between them. Auto Dub stopped for this episode to stop changing your page. Switch back to Sub to keep watching; Scan again retries.";
 
 interface Hooks {
@@ -75,7 +76,8 @@ const UNCLEAR_NOTE = " This site doesn't say whether your tab is on Sub or Dub, 
 function activeReason(result: HostedDubResult, detection?: LanguageDetection | null): string {
   const where = result.container === "offscreen" ? "a hidden copy of this page" : "a minimized Dub window";
   const why = result.container === "window" && result.fallbackReason ? ` The hidden copy didn't work: ${result.fallbackReason}` : "";
-  const unclear = detection?.language === "unknown" && detection.stateUnclear ? UNCLEAR_NOTE : "";
+  // An audio menu is read (and proved) in the hidden copy, so nothing was guessed.
+  const unclear = detection?.language === "unknown" && detection.stateUnclear && !detection.audioControl ? UNCLEAR_NOTE : "";
   return `Dub audio is playing from ${where}${result.provider ? ` (server: ${result.provider})` : ""}.${why}${unclear}`;
 }
 
@@ -126,6 +128,8 @@ export function setupAutoDub(hooks: Hooks) {
   }
   /** When the hidden copy last changed its own language/server control. */
   let hostedSelectedAt = 0;
+  /** Episode whose hidden copy opened already on the viewer's language (see AlreadyDubError). */
+  let alreadyDubPage = "";
   /** Episode where the hidden copy's choice leaked into the visible tab. */
   let leakedPage = "";
   let epoch = 0;
@@ -314,6 +318,29 @@ export function setupAutoDub(hooks: Hooks) {
         result = await attempt("offscreen");
       } catch (hiddenError) {
         if (current.controller.signal.aborted) return;
+        if (isRecord(hiddenError) && hiddenError.name === "AlreadyDubError") {
+          // Not a failure, and a second container would only find the same thing.
+          await hooks.enqueue(async () => {
+            if (job !== current) return;
+            job = null;
+            alreadyDubPage = pageUrl;
+            await hooks.closeHost();
+            await status("waiting", ALREADY_DUB_REASON);
+          });
+          return;
+        }
+        if (isRecord(hiddenError) && hiddenError.name === "HostedPageNoticeError") {
+          // The page itself refused (a stream limit, a region block…). A window
+          // would hear the same, and would count as one more stream.
+          await hooks.enqueue(async () => {
+            if (job !== current) return;
+            job = null;
+            failedPage = pageUrl;
+            await hooks.closeHost();
+            await status("error", errorMessage(hiddenError, "The page in the hidden copy refused to play."));
+          });
+          return;
+        }
         try {
           result = { ...await attempt("window"), fallbackReason: errorMessage(hiddenError, "unknown reason") };
         } catch (windowError) {
@@ -380,6 +407,11 @@ export function setupAutoDub(hooks: Hooks) {
     }
     if (resolved && resolved.pageUrl !== detection.pageUrl) await stopOwned();
     if (failedPage === detection.pageUrl) return;
+    if (alreadyDubPage === detection.pageUrl) {
+      // Only the page itself saying Sub (its audio menu read as the original language) reopens it.
+      if (detection.language !== "sub") { await status("waiting", ALREADY_DUB_REASON); return; }
+      alreadyDubPage = "";
+    }
 
     const probe = await hooks.probe(config.tabId);
     if (epoch !== token || !config) return;
@@ -494,6 +526,7 @@ export function setupAutoDub(hooks: Hooks) {
       recoveredPage = "";
       windowOnlyPage = "";
       leakedPage = "";
+      alreadyDubPage = "";
     }
     detection = next;
     epoch += 1;
@@ -510,6 +543,7 @@ export function setupAutoDub(hooks: Hooks) {
     recoveredPage = "";
     windowOnlyPage = "";
     leakedPage = "";
+    alreadyDubPage = "";
     hostedSelectedAt = 0;
     config = null; state = null; detection = null; armedSite = null; rememberedFor = null;
     await publish();
@@ -656,6 +690,7 @@ export function setupAutoDub(hooks: Hooks) {
         recoveredPage = "";
         windowOnlyPage = "";
         leakedPage = "";
+        alreadyDubPage = "";
         hostedSelectedAt = 0;
         if (!detection) await inspect();
         await reconcile();

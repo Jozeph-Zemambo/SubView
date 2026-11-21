@@ -104,7 +104,7 @@ const POWER_WORD: Record<View, string> = {
 };
 const TALLY: Record<View, string> = {
   loading: "Loading", unavailable: "No episode", off: "Tap to dub", standby: "Standby",
-  searching: "Searching", live: "On air", fault: "Check below",
+  searching: "Searching", live: "On air", fault: "Why? See below",
 };
 
 function serverReadout(): { server: string; source: string; dim: boolean } {
