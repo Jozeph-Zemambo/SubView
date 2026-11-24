@@ -5,6 +5,18 @@ import type { LanguageDetection } from "../shared/language-detection";
 // This host observes controls; the separate discovery flow selects Dub.
 const KEY = "languageDetectionTabs";
 const watched = new Map<number, string | null>();
+/** The document last inspected in each tab; kept across address changes to tell whether the page itself is still there. */
+const lastDocument = new Map<number, string>();
+/**
+ * Chrome reports an address change made by the page's own router exactly like
+ * the start of a page load. What tells them apart is whether the document
+ * that was there is still there to answer.
+ */
+async function documentAlive(tabId: number, documentId: string | undefined): Promise<boolean> {
+  if (!documentId) return false;
+  try { await chrome.tabs.sendMessage(tabId, { type: "PROBE" }, { documentId }); return true; }
+  catch { return false; }
+}
 const generations = new Map<number, number>();
 const inspections = new Map<number, { generation: number; promise: Promise<LanguageDetection> }>();
 let writes = Promise.resolve();
@@ -18,7 +30,10 @@ const restored = chrome.storage.session.get(KEY).then((stored) => {
   const entries = stored[KEY];
   if (Array.isArray(entries)) for (const entry of entries) {
     if (Array.isArray(entry) && Number.isInteger(entry[0]) && entry[0] >= 0 &&
-        (entry[1] === null || typeof entry[1] === "string")) watched.set(entry[0], entry[1]);
+        (entry[1] === null || typeof entry[1] === "string")) {
+      watched.set(entry[0], entry[1]);
+      if (typeof entry[1] === "string") lastDocument.set(entry[0], entry[1]);
+    }
   }
 }).catch(() => undefined);
 
@@ -86,6 +101,7 @@ async function inspectDocument(tabId: number, generation: number): Promise<Langu
   assertCurrent();
   if (!documentId) throw new Error("The page returned no document identifier.");
   watched.set(tabId, documentId);
+  lastDocument.set(tabId, documentId);
   await save();
   assertCurrent();
   const response: unknown = await chrome.tabs.sendMessage(tabId,
@@ -136,7 +152,9 @@ chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
       generations.set(tabId, (generations.get(tabId) ?? 0) + 1);
       watched.set(tabId, null);
       await save();
-      await broadcast(tabId, unknown(tab.url ?? "", "Page changed; checking language controls…"));
+      // The page itself stays loaded when only its address changed (see LanguageDetection.addressOnly).
+      const addressOnly = change.url !== undefined && await documentAlive(tabId, lastDocument.get(tabId));
+      await broadcast(tabId, { ...unknown(tab.url ?? "", "Page changed; checking language controls…"), placeholder: addressOnly ? "address" : "load" });
     }
     // A URL-only update covers SPA pushState/replaceState without patching the
     // site's history methods or polling. Full navigations wait for completion.
@@ -154,6 +172,7 @@ chrome.tabs.onRemoved.addListener(tabId => {
   void restored.then(async () => {
     generations.set(tabId, (generations.get(tabId) ?? 0) + 1);
     watched.delete(tabId);
+    lastDocument.delete(tabId);
     await save();
   }).catch(() => undefined);
 });

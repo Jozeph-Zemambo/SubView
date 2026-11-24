@@ -139,6 +139,28 @@ test("reads an open audio menu directly: original language is Sub, the viewer's 
   });
 });
 
+test("the original-language reading follows the viewer to the next episode in the same app; their own language is read afresh", options(), async () => {
+  const nextEpisode = page => page.evaluate(() => { location.hash = "episode-2"; });
+  await withPage(settingsPanel("Japanese"), async page => {
+    await page.click("#gear");
+    assert.equal((await detect(page)).language, "sub");
+    await page.click("#gear"); // close: the list leaves the page
+    await nextEpisode(page);
+    const next = await detect(page);
+    assert.equal(next.language, "sub", "the player keeps the choice, and so does the reading");
+    assert.deepEqual(next.available, ["sub", "dub"]);
+  });
+  await withPage(settingsPanel("English"), async page => {
+    await page.click("#gear");
+    assert.equal((await detect(page)).language, "dub");
+    await page.click("#gear");
+    await nextEpisode(page);
+    const next = await detect(page);
+    assert.equal(next.language, "unknown", "not carried: a wrong guess here would keep Auto Dub off");
+    assert.equal(next.stateUnclear, true);
+  });
+});
+
 test("a closed menu that turns out to be on the viewer's language reports that instead of pressing anything", options(), async () => {
   await withPage(settingsPanel("English"), async page => {
     const result = await select(page);

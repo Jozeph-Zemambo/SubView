@@ -27,6 +27,9 @@ const ui = {
   mute: element<HTMLButtonElement>("mute"),
   offset: element<HTMLInputElement>("offset"),
   autoOffset: element<HTMLButtonElement>("auto-offset"),
+  autoReload: element<HTMLButtonElement>("auto-reload"),
+  reload: element<HTMLButtonElement>("reload"),
+  useTab: element<HTMLButtonElement>("use-tab"),
   error: element<HTMLParagraphElement>("error"),
   debug: element<HTMLButtonElement>("debug"),
   update: element<HTMLButtonElement>("update"),
@@ -86,7 +89,7 @@ function statusText(current: View): string {
     case "off": return `Sub plays as usual. Tap the burst to hear the Dub on every ${site} episode!`;
     case "standby":
       if (!attachedHere()) return autoDub
-        ? `On for ${site}. It's playing in another tab right now and comes here when that one stops.`
+        ? `On for ${site}. Auto Dub is ${elsewhereActivity(autoDub)} another tab${autoDub.site ? ` (${autoDub.site})` : ""}.`
         : `On for ${site}. It starts when you play an episode in Sub.`;
       return autoDub?.reason || "Waiting for the episode…";
     case "live":
@@ -96,6 +99,14 @@ function statusText(current: View): string {
         : "Dub's playing in sync! Your tab stays on Sub.";
     default: return autoDub?.reason || "";
   }
+}
+
+/** What Auto Dub is doing on the tab it's attached to, when that isn't this one. */
+function elsewhereActivity(other: AutoDubState): string {
+  if (other.status === "finding") return "starting in";
+  if (other.status !== "active") return "attached to"; // Waiting, unsupported, ambiguous or stuck: not playing.
+  if (sync?.primary.endpoint.tabId === other.tabId && (sync.status === "paused" || !sync.timeline.playing)) return "paused in";
+  return "playing in";
 }
 
 // The burst's lettering and caption for each state.
@@ -131,6 +142,7 @@ function renderSettings(): void {
   const offsetMs = hostedHere() ? sync?.manualOffsetMs ?? sync?.offsetMs ?? settings.offsetMs : settings.offsetMs;
   if (document.activeElement !== ui.offset) ui.offset.value = String(Math.round(offsetMs / 100) / 10);
   ui.autoOffset.setAttribute("aria-checked", String(hostedHere() ? sync?.autoOffset === true : settings.autoOffset));
+  ui.autoReload.setAttribute("aria-checked", String(settings.autoReload));
 }
 
 function render(): void {
@@ -141,6 +153,9 @@ function render(): void {
   ui.powerLabel.textContent = POWER_WORD[current];
   ui.tallyText.textContent = TALLY[current];
   ui.status.textContent = statusText(current);
+  ui.reload.hidden = !(attachedHere() && autoDub?.reloadOffer === true);
+  ui.useTab.hidden = !(siteOn() && !attachedHere() && Boolean(autoDub));
+  ui.useTab.disabled = busy;
   ui.power.setAttribute("aria-pressed", String(siteOn()));
   ui.power.setAttribute("aria-label", site
     ? siteOn() ? `Turn off Auto Dub on ${site}` : `Turn on Auto Dub for ${site}`
@@ -165,12 +180,14 @@ async function refresh(): Promise<void> {
   render();
 }
 
-function currentSettings(): Omit<SiteSettings, "dubServer" | "failedServers"> {
+/** The mixer as shown. Learned fields (servers, frame) stay out: the worker keeps the site's own. */
+function currentSettings(): Omit<SiteSettings, "enabled" | "dubServer" | "failedServers" | "lenientFrame"> {
   return {
     volume: Number(ui.volume.value) / 100,
     offsetMs: Math.round((Number(ui.offset.value) || 0) * 1000),
     muteOriginal: ui.mute.getAttribute("aria-checked") === "true",
     autoOffset: ui.autoOffset.getAttribute("aria-checked") === "true",
+    autoReload: ui.autoReload.getAttribute("aria-checked") === "true",
   };
 }
 
@@ -230,6 +247,38 @@ ui.autoOffset.addEventListener("click", () => {
   const enabled = toggleSwitch(ui.autoOffset);
   void applySetting({ type: "SET_AUTO_OFFSET", enabled });
 });
+
+// Saved for the site; before the site is on, the switch just holds the choice for when it is.
+ui.autoReload.addEventListener("click", () => {
+  const enabled = toggleSwitch(ui.autoReload);
+  settings = { ...settings, autoReload: enabled };
+  clearError();
+  if (!siteOn() || !site) return;
+  void send({ type: "SET_AUTO_DUB_RELOAD", site, enabled }).then(response => { absorbAutoDub(response); render(); }, showError);
+});
+
+ui.reload.addEventListener("click", () => {
+  clearError();
+  void send({ type: "AUTO_DUB_RELOAD" }).then(response => { absorbAutoDub(response); render(); }, showError);
+});
+
+/** Move Auto Dub from the tab it's on to this one; the site's saved settings stay as they are. */
+async function useThisTab(): Promise<void> {
+  if (!site || tab?.id === undefined || busy) return;
+  clearError();
+  busy = true;
+  render();
+  try {
+    absorbAutoDub(await send({ type: "USE_AUTO_DUB_TAB", site, tabId: tab.id }));
+    await refresh();
+  } catch (error) {
+    showError(error);
+  } finally {
+    busy = false;
+    render();
+  }
+}
+ui.useTab.addEventListener("click", () => void useThisTab());
 
 function commitOffset(): void {
   const seconds = Number(ui.offset.value);

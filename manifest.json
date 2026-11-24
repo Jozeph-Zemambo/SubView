@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SubView \u2014 Video Sync",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Watch Sub with Dub audio: syncs a visible video with background audio, a hidden copy of the page, or another tab.",
   "minimum_chrome_version": "119",
   "icons": {

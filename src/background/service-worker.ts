@@ -41,10 +41,11 @@ import {
 } from "./offscreen-host";
 import "./language-detection-host";
 import { setupAutoDub } from "./auto-dub";
+import { offerReload, reloadTab, withdrawReloadOffer } from "./reload-offer";
 import "./update-check";
 import "./hosted-diagnostics";
 import { findHostedDub, findReplacementDub } from "./hosted-dub";
-import { closeHost, currentHost, HOSTED_TAB_ID, hostedFrames, refusedConnections, hostedRequest, isHostedSender, onHostedVideoEvent, onHostLost } from "./hosted-host";
+import { closeHost, idleHost, currentHost, HOSTED_TAB_ID, hostedFrames, refusedConnections, hostedRequest, isHostedSender, onHostedVideoEvent, onHostLost } from "./hosted-host";
 
 const TOP_LEVEL_FRAME_ID = 0;
 const INITIAL_REVISION = 0;
@@ -2033,10 +2034,34 @@ async function handleTabUnavailable(
   await commitState(state);
 }
 
+/** Asking a page must never hold up what comes next: no answer in time is no answer. */
+function within<T>(work: Promise<T>, ms: number): Promise<T | null> {
+  return Promise.race([work, new Promise<null>(resolve => setTimeout(() => resolve(null), ms))]);
+}
+
+/** A request to the page script in the video's own frame (see content/player-state.ts). */
+async function askPlayer(tabId: number, video: VideoDescriptor, message: object): Promise<unknown> {
+  const target: FrameTarget = { frameId: video.frameId, documentId: video.documentId };
+  await injectContentIntoFrame(tabId, target);
+  return chrome.tabs.sendMessage(tabId, message, messageOptionsForTarget(target));
+}
+
+/** Before a reload SubView asked for: where the viewer is and what the player's menus have chosen. */
+async function capturePlayer(tabId: number, video: VideoDescriptor): Promise<unknown> {
+  const response = await within(askPlayer(tabId, video, { type: "CAPTURE_PLAYER_STATE", videoId: video.id }), 6_000);
+  return isRecord(response) && response.ok === true ? response.state : null;
+}
+
+/** After it: the same again, in the reloaded page's player. */
+async function restorePlayer(tabId: number, video: VideoDescriptor, state: unknown): Promise<void> {
+  await within(askPlayer(tabId, video, { type: "RESTORE_PLAYER_STATE", videoId: video.id, state }), 90_000);
+}
+
 const autoDub = setupAutoDub({
   enqueue, getState: () => activeState, probe: probeTab,
   startHosted: startHostedDub, stop: stopExistingSync,
-  findDub: findHostedDub, findReplacement: findReplacementDub, closeHost,
+  findDub: findHostedDub, findReplacement: findReplacementDub, closeHost, idleHost,
+  offerReload, withdrawReloadOffer, reloadTab, capturePlayer, restorePlayer,
 });
 
 // Hosted frames have no tab, so their media events arrive over the host channel.

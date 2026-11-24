@@ -1,7 +1,7 @@
 {
   "name": "two-tab-video-sync",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
@@ -13,7 +13,7 @@
     "test:detection": "npm run build && node --test test/language-detection.e2e.mjs && node test/detection-integration.e2e.mjs && node --test test/select-dub.e2e.mjs && node --test test/audio-language.e2e.mjs",
     "test:hls": "npm run build && node --test test/hls-playback.e2e.mjs",
     "test:auto-offset": "npm run build && node test/auto-offset.e2e.mjs",
-    "test:hosted": "npm run build && node test/hosted-dub.e2e.mjs && node test/audio-language-hosted.e2e.mjs",
+    "test:hosted": "npm run build && node test/hosted-dub.e2e.mjs && node test/audio-language-hosted.e2e.mjs && node test/frame-check-hosted.e2e.mjs && node test/reload-offer.e2e.mjs",
     "test:live": "npm run build && node test/live/hosted-dub.live.mjs"
   },
   "devDependencies": {

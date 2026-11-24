@@ -69,6 +69,9 @@ function isolated(): boolean {
         const at = Date.now();
         return { at, ...await selectDubInteractive(document, request.force === true) };
       }
+      case "IDLE":
+        for (const video of Array.from(document.querySelectorAll("video"))) video.pause();
+        return { ok: true };
       case "LIST_PROVIDERS":
         return listProviders(document);
       case "NOTICES":

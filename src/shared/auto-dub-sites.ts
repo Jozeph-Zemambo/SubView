@@ -1,5 +1,5 @@
-// Per-site Auto Dub: sites the user turned Auto Dub on for, with the settings
-// and server memory learned there. Pure helpers; storage lives in the worker.
+// Per-site Auto Dub: sites the user turned Auto Dub on for (or on, then off
+// again), with the settings and server memory learned there. Pure helpers; storage lives in the worker.
 
 import { providerFamily } from "./hosted-selection";
 
@@ -7,6 +7,8 @@ import { providerFamily } from "./hosted-selection";
 export const FAILED_SERVER_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface SiteSettings {
+  /** Auto Dub is on for this site. Off keeps the settings below for when it's turned back on. */
+  enabled: boolean;
   volume: number;
   offsetMs: number;
   muteOriginal: boolean;
@@ -15,15 +17,22 @@ export interface SiteSettings {
   dubServer: string | null;
   /** Server family → when it last failed (epoch ms). */
   failedServers: Record<string, number>;
+  /** This site's pages only run in the lenient hidden frame (see host/mount.ts). */
+  lenientFrame: boolean;
+  /** The viewer allowed SubView to reload their tab when that lets Dub start without a wait. */
+  autoReload: boolean;
 }
 
 export const DEFAULT_SITE_SETTINGS: SiteSettings = {
+  enabled: true,
   volume: 0.8,
   offsetMs: 0,
   muteOriginal: true,
   autoOffset: false,
   dubServer: null,
   failedServers: {},
+  lenientFrame: false,
+  autoReload: false,
 };
 
 /** The site key for a page: its hostname, without a leading "www.". */
@@ -51,12 +60,16 @@ export function normalizeSiteSettings(value: unknown): SiteSettings {
     }
   }
   return {
+    // Entries saved before this field existed were sites the user had turned on.
+    enabled: record.enabled !== false,
     volume: Math.min(1, Math.max(0, finite(record.volume, DEFAULT_SITE_SETTINGS.volume))),
     offsetMs: finite(record.offsetMs, 0),
     muteOriginal: typeof record.muteOriginal === "boolean" ? record.muteOriginal : true,
     autoOffset: record.autoOffset === true,
     dubServer: typeof record.dubServer === "string" && record.dubServer ? record.dubServer : null,
     failedServers: failed,
+    lenientFrame: record.lenientFrame === true,
+    autoReload: record.autoReload === true,
   };
 }
 

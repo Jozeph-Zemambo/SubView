@@ -49,6 +49,8 @@ interface OffscreenHostMessage {
   target: typeof OFFSCREEN_TARGET;
   type: "OFFSCREEN_HOST";
   url: string;
+  /** Let the page attempt to take over the window (see host/mount.ts). */
+  lenient?: boolean;
 }
 
 interface OffscreenUnhostMessage {
@@ -385,7 +387,7 @@ function handleOffscreenMessage(message: OffscreenMessage): OffscreenResponse | 
     case "OFFSCREEN_STOP":
       return stopMedia();
     case "OFFSCREEN_HOST":
-      mountHostedPage(message.url);
+      mountHostedPage(message.url, message.lenient === true);
       return { ok: true };
     case "OFFSCREEN_UNHOST":
       unmountHostedPage();

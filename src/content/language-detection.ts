@@ -470,6 +470,13 @@ function audioTriggers(doc: Document): Element[] {
 // What the control said when it was last readable, per page address: closing
 // the menu removes the options, not the choice. Player controls also leave the
 // page while idle, so a trigger seen on this address still counts.
+//
+// A reading of the original language also follows the viewer to the next
+// episode inside the same app: players keep the audio choice while the page
+// stays loaded, and nothing on the new address would say so (the menu is
+// closed). A reading of the viewer's own language is not carried: there, being
+// wrong would keep Auto Dub off, so it is read afresh. A reload starts with
+// nothing, as the player does.
 let audioMemory: { href: string; current: AvailableLanguage; hasDub: boolean } | null = null;
 let audioTriggerSeenOn = '';
 
@@ -492,6 +499,10 @@ function audioState(doc: Document): AudioState | null {
   const [trigger] = audioTriggers(doc);
   if (trigger) audioTriggerSeenOn = href;
   else if (audioTriggerSeenOn !== href || !doc.body || !playersIn(doc.body).length) return null;
+  if (trigger && audioMemory && audioMemory.href !== href) {
+    // Whether this episode has the viewer's language is for the hidden copy to find out.
+    audioMemory = audioMemory.current === 'sub' ? { href, current: 'sub', hasDub: true } : null;
+  }
   if (audioMemory?.href === href) return { current: audioMemory.current, hasDub: audioMemory.hasDub, element: trigger ?? null };
   // Closed and never read: the hidden copy opens it to find out.
   return { current: null, hasDub: true, element: trigger ?? null };
@@ -567,6 +578,150 @@ async function selectFromAudioControl(doc: Document): Promise<{ ok: boolean; err
   // A stale "Sub" must not outlive the press; an address change forgets it anyway.
   audioMemory = confirmed ? { href: doc.location?.href ?? doc.URL, current: 'dub', hasDub: true } : null;
   return { ok: true, at, confirmed };
+}
+
+// ---------- putting a player's choices back ----------
+// A reload SubView itself asked for must not cost the viewer their settings.
+// Many players come back from one on their defaults (audio, subtitles, speed).
+// So before the reload SubView notes what each of the player's menus has
+// chosen, by the names the page gives them, and afterwards chooses the same
+// again. Nothing here knows any site: a choice is a named menu, list or select
+// with exactly one option chosen, found in the player or opened by one of its
+// own buttons.
+export interface PlayerChoice {
+  /** The name the page gives the group ("Audio Language", "Subtitles"). */
+  group: string;
+  /** The text of the chosen option. */
+  option: string;
+}
+
+const CHOICE_OPEN_MS = 1_000;
+const CHOICE_SETTLE_MS = 500;
+const MAX_CHOICES = 12;
+
+interface ChoiceGroup {
+  element: Element;
+  name: string;
+  options: Element[];
+  selected: Element;
+  inPlayer: boolean;
+}
+
+/**
+ * A closed panel often stays in the page, laid out but fully transparent. Only
+ * used to tell what was there before a menu opened: a panel that has just
+ * opened can be transparent too (its fade-in does not advance in a tab that is
+ * not on screen), and that one must be read.
+ */
+function fadedOut(element: Element): boolean {
+  const view = element.ownerDocument.defaultView;
+  if (!view) return false;
+  for (let item: Element | null = element; item; item = item.parentElement) {
+    if (Number(view.getComputedStyle(item).opacity) === 0) return true;
+  }
+  return false;
+}
+
+/** Choice groups rendered right now. Which server plays is not the viewer's setting to put back. */
+function choiceGroups(doc: Document, countFaded = true): ChoiceGroup[] {
+  return Array.from(doc.querySelectorAll(AUDIO_GROUP)).flatMap((group): ChoiceGroup[] => {
+    const name = explicitName(group);
+    if (!name || SERVER_NAME.test(name) || !visible(group) || (!countFaded && fadedOut(group))) return [];
+    const options = Array.from(group.querySelectorAll(AUDIO_OPTION)).filter(option => enabled(option) && audioOptionText(option));
+    const selectedOptions = options.filter(chosen);
+    if (options.length < 2 || selectedOptions.length !== 1) return [];
+    return [{ element: group, name, options, selected: selectedOptions[0], inPlayer: Boolean(group.closest(PLAYER_AREA)) }];
+  });
+}
+
+/**
+ * Open each of the player's menus, run `read`, and close the menu again.
+ * `read` is given a way to look at the groups that belong to the player right
+ * now (inside it, or not on the page before the menu opened). It returns true
+ * to have the same menu reopened and read once more (a menu that closes itself
+ * after a choice).
+ */
+async function withPlayerMenus(doc: Document, read: (look: () => ChoiceGroup[]) => Promise<boolean>): Promise<void> {
+  // The player's own: inside it, inside the panel the button says it controls, or not on the page before the menu opened.
+  const mine = (known: Set<string>, panel: Element | null = null) => choiceGroups(doc).filter(group =>
+    group.inPlayer || !known.has(group.name) || Boolean(panel?.contains(group.element)));
+  const until = async (test: () => boolean, ms: number) => { for (const started = Date.now(); !test() && Date.now() - started < ms;) await sleep(100); return test(); };
+  // Choices that need no opening: plain selects in the player.
+  const shown = new Set(choiceGroups(doc, false).map(group => group.name));
+  await read(() => mine(shown).filter(group => group.selected instanceof HTMLOptionElement));
+  for (const trigger of audioTriggers(doc)) {
+    for (let round = 0; round < MAX_CHOICES; round += 1) {
+      if (!trigger.isConnected) break;
+      // What is on the page while the menu is closed; a faded-out panel is not.
+      const known = new Set(choiceGroups(doc, false).map(group => group.name));
+      // A button that says whether its menu is open is believed: a closed
+      // panel often stays in the page, faded out, and looks rendered. Without
+      // that, open means groups that were not there before.
+      const says = trigger.hasAttribute('aria-expanded');
+      const controls = trigger.getAttribute('aria-controls');
+      const panel = controls ? doc.getElementById(controls) : null;
+      const open = () => says ? trigger.getAttribute('aria-expanded') === 'true' : choiceGroups(doc).some(group => !known.has(group.name));
+      // Open already (the viewer's doing): read it as it is, and leave it open.
+      const wasOpen = open();
+      if (!wasOpen) {
+        // Click-openers first: a full press would toggle them twice.
+        (trigger as HTMLElement).click();
+        if (!await until(open, CHOICE_OPEN_MS)) { press(trigger); await until(open, CHOICE_OPEN_MS); }
+      }
+      if (!open()) break; // Not a menu SubView can open: nothing is pressed blind.
+      await until(() => mine(known, panel).length > 0, CHOICE_OPEN_MS); // Menus render a moment after they open.
+      const again = await read(() => mine(known, panel));
+      if (!wasOpen && open()) {
+        const KeyboardEventConstructor = doc.defaultView?.KeyboardEvent ?? KeyboardEvent;
+        trigger.dispatchEvent(new KeyboardEventConstructor('keydown', { key: 'Escape', bubbles: true }));
+        if (!await until(() => !open(), 400)) { (trigger as HTMLElement).click(); await until(() => !open(), CHOICE_OPEN_MS); }
+      }
+      if (!again) break;
+    }
+  }
+}
+
+/** What the player's menus have chosen right now. Opens and closes them to look. */
+export async function capturePlayerChoices(doc: Document): Promise<PlayerChoice[]> {
+  const found = new Map<string, string>();
+  await withPlayerMenus(doc, async look => {
+    for (const group of look()) if (!found.has(group.name)) found.set(group.name, audioOptionText(group.selected));
+    return false;
+  });
+  return Array.from(found, ([group, option]) => ({ group, option })).slice(0, MAX_CHOICES);
+}
+
+/** Choose the noted options again where the player now has something else. Returns the names of the groups it changed. */
+export async function restorePlayerChoices(doc: Document, choices: PlayerChoice[]): Promise<string[]> {
+  const wanted = new Map(choices.slice(0, MAX_CHOICES).map(choice => [choice.group, choice.option]));
+  const seen = new Set<string>();
+  const changed: string[] = [];
+  const choose = (target: Element) => {
+    if (!(target instanceof HTMLOptionElement)) { press(target); return; }
+    const select = target.closest('select');
+    if (!select) return;
+    select.value = target.value;
+    select.selectedIndex = target.index;
+    const EventConstructor = doc.defaultView?.Event ?? Event;
+    select.dispatchEvent(new EventConstructor('input', { bubbles: true }));
+    select.dispatchEvent(new EventConstructor('change', { bubbles: true }));
+  };
+  await withPlayerMenus(doc, async look => {
+    let pressed = false;
+    // Look afresh after every choice: pressing an option can redraw the menu, or close it.
+    for (let group; (group = look().find(item => wanted.has(item.name) && !seen.has(item.name)));) {
+      seen.add(group.name);
+      const target = group.options.find(option => audioOptionText(option) === wanted.get(group!.name));
+      if (!target || chosen(target)) continue;
+      choose(target);
+      pressed = true;
+      changed.push(group.name);
+      await sleep(CHOICE_SETTLE_MS);
+    }
+    // Reopen only a menu that a choice may have closed with groups still to do.
+    return pressed && seen.size < wanted.size;
+  });
+  return changed;
 }
 
 interface RecognizedOption {

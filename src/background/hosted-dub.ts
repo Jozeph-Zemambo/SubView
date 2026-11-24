@@ -6,10 +6,12 @@ import {
   chooseDubVideo, nextProvider, providerFamily,
   type HostedVideoCandidate, type ProviderChoice,
 } from "../shared/hosted-selection";
-import { guardSettingsWrites, HOSTED_TAB_ID, hostedFrames, hostedRequest, onHostedChange, openHost, type HostedFrame } from "./hosted-host";
+import { guardSettingsWrites, HOSTED_TAB_ID, hostedFrames, hostedRequest, hostLostReason, onHostedChange, openHost, type HostedFrame } from "./hosted-host";
 
 const PAGE_LOAD_TIMEOUT_MS = 30_000;
 const CONTROLS_TIMEOUT_MS = 20_000;
+/** A copy that moved off the episode onto a page with no player gets this long to come back. */
+const LEFT_PAGE_TIMEOUT_MS = 4_000;
 const SERVER_TIMEOUT_MS = 25_000;
 /**
  * A selection that starts no load at all within this long did nothing (for
@@ -63,6 +65,30 @@ export interface HostedDubRequest {
   onProgress(message: string): void;
   /** Called after the hidden copy's language or server control changed. */
   onSelected?(): void;
+  /**
+   * The visible page's own audio menu read as the original language. A hidden
+   * copy that opens on the viewer's language is then the Dub already: players
+   * that start every page load on their default audio leave the fresh copy
+   * there, while the visible tab was switched by hand.
+   */
+  visibleOnOriginal?: boolean;
+  /** Hidden document only: let the page attempt to take over its window (see host/mount.ts). */
+  lenientFrame?: boolean;
+  /** A copy of this episode was kept open after an earlier lookup: use it instead of loading another. */
+  reuseOpenCopy?: boolean;
+  /** Shown while the hidden copy loads, in place of the usual line. */
+  startMessage?: string;
+}
+
+/**
+ * The hidden copy ended up with no player and no controls: the usual sign of a
+ * page that refuses to run inside another page. A lenient frame is worth a try.
+ */
+export class HostedPageGoneError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HostedPageGoneError";
+  }
 }
 
 export interface HostedDubResult {
@@ -121,6 +147,10 @@ function selectionTime(response: Record<string, unknown>): number {
   return typeof response.at === "number" && Number.isFinite(response.at) ? response.at : Date.now();
 }
 
+function samePath(href: string, pageUrl: string): boolean {
+  try { return new URL(href).pathname === new URL(pageUrl).pathname; } catch { return false; }
+}
+
 function sameSite(href: string, pageUrl: string): boolean {
   try { return new URL(href).origin === new URL(pageUrl).origin; } catch { return false; }
 }
@@ -161,6 +191,9 @@ export async function findHostedDub(request: HostedDubRequest): Promise<HostedDu
     return await lookUpHostedDub(request);
   } catch (error) {
     if (request.signal.aborted || error instanceof AlreadyDubError) throw error;
+    // A copy that blanked itself may show its own error screen; that screen is
+    // the symptom, not a refusal another attempt would also get.
+    if (error instanceof HostedPageGoneError && request.lenientFrame !== true && request.container === "offscreen") throw error;
     const notice = await pageNotice();
     if (!notice) throw error;
     throw new HostedPageNoticeError(error instanceof Error ? error.message : String(error), notice);
@@ -170,12 +203,12 @@ export async function findHostedDub(request: HostedDubRequest): Promise<HostedDu
 async function lookUpHostedDub(request: HostedDubRequest): Promise<HostedDubResult> {
   const { pageUrl, signal } = request;
   const started = Date.now();
-  request.onProgress(request.container === "offscreen"
-    ? "Loading a hidden copy of this episode…"
-    : "Loading this episode in a minimized Dub window…");
+  request.onProgress(request.container !== "offscreen" ? "Loading this episode in a minimized Dub window…"
+    : request.startMessage ?? "Loading a hidden copy of this episode…");
   // When the address names the language, load the Dub address directly; its
   // controls (or address) then already say Dub and nothing needs clicking.
-  await openHost(dubUrlFor(pageUrl) ?? pageUrl, request.container);
+  const openedUrl = dubUrlFor(pageUrl) ?? pageUrl;
+  await openHost(openedUrl, request.container, { lenient: request.lenientFrame === true, reuse: request.reuseOpenCopy === true });
 
   let topSeenAt = 0;
   let selectedAt = 0;
@@ -203,6 +236,8 @@ async function lookUpHostedDub(request: HostedDubRequest): Promise<HostedDubResu
     signal.throwIfAborted();
     const top = hostedFrames().find(frame => frame.depth === 1);
     if (!top) {
+      // The container went away by itself; there is nothing left to wait for.
+      if (hostLostReason()) throw new Error(hostLostReason());
       if (Date.now() - started > PAGE_LOAD_TIMEOUT_MS) throw new Error("The episode page did not load in the hidden player.");
       await waitForChange(signal);
       continue;
@@ -230,8 +265,15 @@ async function lookUpHostedDub(request: HostedDubRequest): Promise<HostedDubResu
     const language = unclear ? (dubRequested ? "dub" : "sub") : detection.language;
 
     if (language === "unknown") {
-      if (Date.now() - topSeenAt > CONTROLS_TIMEOUT_MS) {
-        throw new Error(`The hidden page never showed its Sub/Dub controls. ${detection.reason}`);
+      const waited = Date.now() - topSeenAt;
+      const left = !samePath(detection.pageUrl, openedUrl);
+      if ((left && waited > LEFT_PAGE_TIMEOUT_MS) || waited > CONTROLS_TIMEOUT_MS) {
+        const reason = left
+          ? "The hidden copy left the episode page."
+          : `The hidden page never showed its Sub/Dub controls. ${detection.reason}`;
+        // No player either: the page gave up on itself rather than on Dub.
+        if ((await candidates()).length === 0) throw new HostedPageGoneError(reason);
+        if (waited > CONTROLS_TIMEOUT_MS) throw new Error(reason);
       }
     } else if (language === "sub") {
       if (!detection.available.includes("dub")) throw new Error("This episode has no Dub option.");
@@ -250,7 +292,15 @@ async function lookUpHostedDub(request: HostedDubRequest): Promise<HostedDubResu
         } finally {
           if (guarded) setTimeout(() => void guardSettingsWrites(false), SETTINGS_GUARD_MS);
         }
-        if (isRecord(answer) && answer.already === true) throw new AlreadyDubError();
+        if (isRecord(answer) && answer.already === true) {
+          if (request.visibleOnOriginal !== true) throw new AlreadyDubError();
+          // Nothing to press: the video this copy already loaded is the Dub.
+          confirmedByControl = true;
+          dubRequested = true;
+          attemptDeadline = Date.now() + SERVER_TIMEOUT_MS;
+          request.onProgress("The hidden copy opened on Dub…");
+          continue;
+        }
         const response = ok(answer, "Could not select Dub in the hidden page.");
         confirmedByControl = response.confirmed === true;
         dubRequested = true;
@@ -263,6 +313,10 @@ async function lookUpHostedDub(request: HostedDubRequest): Promise<HostedDubResu
         throw new Error("The hidden page did not switch to Dub.");
       }
     } else {
+      // A copy found on the viewer's language with nothing pressed (a kept copy,
+      // or one whose menu was open) is the Dub only if the viewer's tab is known
+      // to be on the original language. Otherwise it says what the tab plays too.
+      if (!dubRequested && detection.audioControl === true && request.visibleOnOriginal !== true) throw new AlreadyDubError();
       // Dub is selected. Settle which server to try first, once.
       if (options === null) {
         options = await listOptions(top);

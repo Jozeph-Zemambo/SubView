@@ -20,6 +20,17 @@ test('stored settings are cleaned up rather than trusted', () => {
   assert.deepEqual(settings.failedServers, { beta: 5 });
 });
 
+test('a site saved before sites could be turned off stays on; only an explicit false is off', () => {
+  assert.equal(sites.normalizeSiteSettings({ volume: 0.5, autoReload: true }).enabled, true);
+  assert.equal(sites.normalizeSiteSettings({}).enabled, true);
+  assert.equal(sites.normalizeSiteSettings({ enabled: false, volume: 0.5, lenientFrame: true }).enabled, false);
+  const off = sites.normalizeSiteSettings({ enabled: false, volume: 0.5, lenientFrame: true, dubServer: 'alpha' });
+  assert.equal(off.volume, 0.5, 'an off site keeps its settings');
+  assert.equal(off.lenientFrame, true);
+  assert.equal(off.dubServer, 'alpha');
+  assert.equal(sites.DEFAULT_SITE_SETTINGS.enabled, true);
+});
+
 test('server memory: a working server is remembered and cleared from failures; a failed remembered one is forgotten', () => {
   let s = sites.normalizeSiteSettings({});
   s = sites.rememberFailedServer(s, 'alpha · embed', 1000);

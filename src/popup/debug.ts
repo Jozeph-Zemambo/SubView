@@ -1456,7 +1456,7 @@ function renderAutoDub(): void {
   if (!autoDub || autoDub.tabId !== selectedTabId) {
     autoDubStateElement.textContent = "On";
     autoDubDetail.textContent = autoDub
-      ? `Auto Dub is on for ${site}. It's working in another tab right now; it moves here when that one is done.`
+      ? `Auto Dub is on for ${site}. It's currently attached to another tab${autoDub.site ? ` (${autoDub.site})` : ""}; stop or move it to use this tab.`
       : `Auto Dub is on for ${site}. It starts when you watch an episode here.`;
     return;
   }

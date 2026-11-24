@@ -26,6 +26,8 @@ interface ContainerRecord {
   pageUrl: string;
   tabId?: number;
   windowId?: number;
+  /** The page is in the lenient frame (see host/mount.ts). */
+  lenient?: boolean;
 }
 
 export interface HostedFrame {
@@ -46,6 +48,8 @@ const pending = new Map<number, { key: string; resolve(value: unknown): void; re
 const changeListeners = new Set<() => void>();
 const eventListeners = new Set<(message: ContentEventMessage, sender: chrome.runtime.MessageSender) => void>();
 const lostListeners = new Set<(reason: string) => void>();
+/** Why the last container went away by itself, until the next one opens. */
+let lostReason = "";
 let requestSequence = 0;
 // Opens and closes run one at a time. A lookup that was cancelled mid-open
 // finishes its open before the next one starts, and the next open replaces it,
@@ -67,6 +71,7 @@ const restored = chrome.storage.session.get(CONTAINER_KEY).then(async stored => 
     pageUrl: value.pageUrl,
     ...(Number.isInteger(value.tabId) ? { tabId: value.tabId as number } : {}),
     ...(Number.isInteger(value.windowId) ? { windowId: value.windowId as number } : {}),
+    ...(value.lenient === true ? { lenient: true } : {}),
   };
   const alive = record.kind === "offscreen"
     ? await hasOffscreenPlayer()
@@ -174,7 +179,27 @@ chrome.tabs.onRemoved.addListener(tabId => {
     frames.clear();
     await persist();
     await clearSessionArtifacts();
-    for (const listener of lostListeners) listener("The Dub window was closed.");
+    lostReason = "The Dub window was closed.";
+    for (const listener of lostListeners) listener(lostReason);
+  }).catch(() => undefined);
+});
+
+chrome.tabs.onUpdated.addListener((tabId, change) => {
+  // A page that refuses to run inside another page can take over the Dub
+  // window: the window then shows the site itself, playing by its own rules
+  // with none of SubView's scripts. Close it rather than leave it behind.
+  if (!change.url || change.url.startsWith(chrome.runtime.getURL(HOST_PAGE))) return;
+  void serialized(async () => {
+    await restored;
+    if (container?.kind !== "window" || container.tabId !== tabId) return;
+    const windowId = container.windowId;
+    container = null;
+    dropFrames("The page took over the Dub window.");
+    await persist();
+    if (windowId !== undefined) await chrome.windows.remove(windowId).catch(() => undefined);
+    await clearSessionArtifacts();
+    lostReason = "This page refuses to play inside another page: it took over the Dub window, so SubView closed it.";
+    for (const listener of lostListeners) listener(lostReason);
   }).catch(() => undefined);
 });
 
@@ -193,6 +218,11 @@ export function onHostLost(listener: (reason: string) => void): void {
 
 export function hostedFrames(): HostedFrame[] {
   return [...frames.values()].map(({ port: _port, ...frame }) => frame);
+}
+
+/** Set when the container closed by itself (its window was closed, or a page took it over). */
+export function hostLostReason(): string {
+  return lostReason;
 }
 
 export function currentHost(): Readonly<ContainerRecord> | null {
@@ -380,9 +410,18 @@ async function clearSessionArtifacts(): Promise<void> {
   try { await chrome.scripting.unregisterContentScripts({ ids: [TRAIL_SCRIPT_ID] }); } catch { /* Debug was off. */ }
 }
 
-/** Load the episode page into a fresh container. Replaces any existing container. */
-export function openHost(pageUrl: string, kind: HostContainer): Promise<void> {
-  return serialized(() => openHostNow(pageUrl, kind));
+/**
+ * Load the episode page into a fresh container. Replaces any existing container.
+ * `lenient` (hidden document only) lets the page attempt to take over its window; see host/mount.ts.
+ * `reuse` keeps a copy of this very page that is already open, instead of loading it again.
+ */
+export function openHost(pageUrl: string, kind: HostContainer, options: { lenient?: boolean; reuse?: boolean } = {}): Promise<void> {
+  return serialized(() => openHostNow(pageUrl, kind, options.lenient === true && kind === "offscreen", options.reuse === true));
+}
+
+/** Pause every video in the open copy. It stays loaded, ready to be linked later. */
+export async function idleHost(): Promise<void> {
+  await Promise.all([...frames.keys()].map(key => hostedRequest(key, { type: "IDLE" }).catch(() => undefined)));
 }
 
 function dropFrames(reason: string): void {
@@ -397,29 +436,33 @@ function dropFrames(reason: string): void {
   }
 }
 
-async function openHostNow(pageUrl: string, kind: HostContainer): Promise<void> {
+async function openHostNow(pageUrl: string, kind: HostContainer, lenient: boolean, reuse: boolean): Promise<void> {
   await restored;
+  lostReason = "";
+  // Whichever frame the kept copy is in already proved itself; the caller's choice is for a fresh load.
+  if (reuse && container?.kind === kind && container.pageUrl === pageUrl &&
+      frames.size > 0 && (kind !== "offscreen" || await hasOffscreenPlayer())) return;
   // Next episode in the hidden document: keep the document and the registered
   // scripts, swap only the page. Tearing both down and rebuilding them a moment
   // later is slower and invites registration races.
   if (container?.kind === "offscreen" && kind === "offscreen" && await hasOffscreenPlayer()) {
     dropFrames("The hidden Dub page moved to another episode.");
-    container = { kind, pageUrl };
+    container = { kind, pageUrl, ...(lenient ? { lenient } : {}) };
     await persist();
     await registerScripts();
     await setRules(pageUrl, [chrome.tabs.TAB_ID_NONE]);
-    const result = await offscreenRequest({ type: "OFFSCREEN_HOST", url: pageUrl });
+    const result = await offscreenRequest({ type: "OFFSCREEN_HOST", url: pageUrl, lenient });
     if (!isRecord(result) || result.ok !== true) throw new Error("The hidden Dub page could not be created.");
     return;
   }
   await closeHostNow();
-  container = { kind, pageUrl };
+  container = { kind, pageUrl, ...(lenient ? { lenient } : {}) };
   await persist();
   await registerScripts();
   if (kind === "offscreen") {
     await setRules(pageUrl, [chrome.tabs.TAB_ID_NONE]);
     await createOffscreenPlayer();
-    const result = await offscreenRequest({ type: "OFFSCREEN_HOST", url: pageUrl });
+    const result = await offscreenRequest({ type: "OFFSCREEN_HOST", url: pageUrl, lenient });
     if (!isRecord(result) || result.ok !== true) throw new Error("The hidden Dub page could not be created.");
     return;
   }

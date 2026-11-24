@@ -36,6 +36,8 @@ export interface VideoDescriptor {
   mediaSources?: string[];
   /** Hosted pages only: when this element last started loading media (epoch ms). */
   loadStartedAt?: number;
+  /** The video is copy-protected (encrypted media): the mark of a service that counts streams. */
+  protected?: boolean;
   durationMs: number | null;
   currentTimeMs: number;
   paused: boolean;

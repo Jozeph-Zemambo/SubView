@@ -119,6 +119,7 @@ export function describeVideo(video: HTMLVideoElement, index: number): VideoDesc
     readyState: video.readyState,
     width,
     height,
+    ...(video.mediaKeys ? { protected: true } : {}),
   };
 }
 

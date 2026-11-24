@@ -2,6 +2,7 @@ import type { ContentRequest, SelectProviderContentRequest, Side, VideoCommand }
 import { probeVideos } from "./video-probe";
 import { VideoController, type ContentControllerResponse } from "./video-controller";
 import { detectLanguage, observeLanguage, selectDub, selectSub, selectProvider } from "./language-detection";
+import { capturePlayerState, isPlayerState, restorePlayerState } from "./player-state";
 
 const CONTENT_STATE_KEY = "__subview4dub_content_entry_state_v1";
 
@@ -149,6 +150,20 @@ function installContentEntry(): ContentEntryState {
           (sender.id !== chrome.runtime.id || sender.tab !== undefined)) {
         sendResponse({ ok: false, error: "Unauthorized content request" });
         return false;
+      }
+      // Worker only, and answered later: reading or pressing the player's menus takes a moment.
+      if (isRecord(message) && (message.type === "CAPTURE_PLAYER_STATE" || message.type === "RESTORE_PLAYER_STATE")) {
+        if (sender.id !== chrome.runtime.id || sender.tab !== undefined || typeof message.videoId !== "string") {
+          sendResponse({ ok: false, error: "Unauthorized content request" });
+          return false;
+        }
+        const work = message.type === "CAPTURE_PLAYER_STATE"
+          ? capturePlayerState(document, message.videoId).then(found => ({ ok: found !== null, state: found }))
+          : isPlayerState(message.state)
+            ? restorePlayerState(document, message.videoId, message.state).then(result => ({ ok: true, ...result }))
+            : Promise.resolve({ ok: false, error: "Nothing to put back." });
+        void work.then(sendResponse, error => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+        return true;
       }
       if (!isContentRequest(message)) {
         sendResponse({ ok: false, error: "Unsupported content request" });

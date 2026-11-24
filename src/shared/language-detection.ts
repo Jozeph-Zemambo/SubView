@@ -27,4 +27,11 @@ export interface LanguageDetection {
    * guard (see hosted-host.ts).
    */
   audioControl?: boolean;
+  /**
+   * Not a reading of the page but a notice that one is coming. "load": the
+   * page that was there is gone (a navigation or a reload). "address": only
+   * the address changed and the page stays loaded (the app's own router); such
+   * a change can come straight back, so it says nothing yet.
+   */
+  placeholder?: "load" | "address";
 }

@@ -221,6 +221,24 @@ body:is([data-state="unavailable"], [data-state="loading"]) .burst { opacity: 0.
   transform: translateX(-50%) rotate(45deg);
 }
 
+/* The one thing to press while Dub waits on a reload: loud, right under the bubble. */
+.reload {
+  display: block;
+  margin: -4px auto 14px;
+  padding: 8px 14px;
+  border: 2.5px solid var(--burst-stroke);
+  background: var(--yellow);
+  box-shadow: 3px 3px 0 var(--shadow);
+  color: #111;
+  font: 900 13px/1.2 var(--body);
+  letter-spacing: 0.02em;
+  transform: rotate(-1.5deg);
+}
+.reload[hidden] { display: none; }
+.reload:hover { transform: rotate(-1.5deg) translate(-1px, -1px); box-shadow: 4px 4px 0 var(--shadow); }
+.reload:active { transform: rotate(-1.5deg) translate(1px, 1px); box-shadow: 2px 2px 0 var(--shadow); }
+.reload:disabled { opacity: 0.6; cursor: default; transform: rotate(-1.5deg); box-shadow: 3px 3px 0 var(--shadow); }
+
 /* ---------- server / source ---------- */
 .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
 .panel {
