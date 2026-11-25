@@ -101,12 +101,16 @@
     };
   }
 
-  // Animation frames: a page that never paints never runs them. Drive them from a timer.
+  // Animation frames: a page that never paints never runs them. Drive them from
+  // a timer, slowly: nobody sees this page, and players only need frames to
+  // keep going. At 60 a second, a page's animation loops would burn the
+  // viewer's CPU in the background for nothing.
+  const FRAME_MS = 100;
   const frames = new Map<number, ReturnType<typeof setTimeout>>();
   let nextFrame = 0;
   window.requestAnimationFrame = callback => {
     const handle = ++nextFrame;
-    frames.set(handle, setTimeout(() => { frames.delete(handle); callback(performance.now()); }, 16));
+    frames.set(handle, setTimeout(() => { frames.delete(handle); callback(performance.now()); }, FRAME_MS));
     return handle;
   };
   window.cancelAnimationFrame = handle => {

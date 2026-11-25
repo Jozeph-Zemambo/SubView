@@ -63,9 +63,15 @@ function serialized<T>(operation: () => Promise<T>): Promise<T> {
 /** Recent refused connections, for diagnostics. */
 export const refusedConnections: Array<{ url?: string; tab?: number; container: string | null }> = [];
 
+// With no hosted page open, nothing SubView registers for one may be left
+// behind: scripts that run in every frame of every site, header rules. A
+// worker that stopped mid-open (crash, update) would otherwise leave them on.
 const restored = chrome.storage.session.get(CONTAINER_KEY).then(async stored => {
   const value = (stored as Record<string, unknown>)[CONTAINER_KEY];
-  if (!isRecord(value) || (value.kind !== "offscreen" && value.kind !== "window") || typeof value.pageUrl !== "string") return;
+  if (!isRecord(value) || (value.kind !== "offscreen" && value.kind !== "window") || typeof value.pageUrl !== "string") {
+    await clearSessionArtifacts();
+    return;
+  }
   const record: ContainerRecord = {
     kind: value.kind,
     pageUrl: value.pageUrl,

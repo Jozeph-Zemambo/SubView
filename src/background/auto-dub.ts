@@ -14,7 +14,7 @@ import {
   DEFAULT_SITE_SETTINGS, normalizeSiteSettings, recentlyFailed, rememberFailedServer, rememberWorkingServer, siteKey,
   type SiteSettings,
 } from "../shared/auto-dub-sites";
-import { inspectLanguage, onLanguageDetection } from "./language-detection-host";
+import { inspectLanguage, keepLanguageWatch, onLanguageDetection, unwatchLanguage } from "./language-detection-host";
 import type { HostedDubRequest, HostedDubResult } from "./hosted-dub";
 
 const KEY = "autoDubSession";
@@ -859,9 +859,12 @@ export function setupAutoDub(hooks: Hooks) {
     void hooks.enqueue(reconcile).catch(() => undefined);
   }
   onLanguageDetection(accept);
+  // The armed tab stays watched when it moves to another site: Auto Dub decides (follow → disable) what happens then.
+  keepLanguageWatch(tabId => config?.tabId === tabId);
 
   async function disable(): Promise<void> {
     await restored;
+    const detached = config?.tabId;
     epoch += 1;
     await stopOwned();
     failedPage = "";
@@ -876,6 +879,10 @@ export function setupAutoDub(hooks: Hooks) {
     if (settling) clearTimeout(settling.timer);
     settling = null;
     config = null; state = null; detection = null; armedSite = null; rememberedFor = null;
+    // The tab's page stops observing its controls, and its next pages aren't
+    // inspected: watching a tab Auto Dub left (for another site, another tab,
+    // or off) only costs that page time.
+    if (detached !== undefined) await unwatchLanguage(detached);
     await publish();
   }
 

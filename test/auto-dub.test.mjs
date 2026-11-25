@@ -10,7 +10,10 @@ const compiled = await build({
     builder.onResolve({ filter: /^\.\/language-detection-host$/ }, () => ({ path: 'detector', namespace: 'fixture' }));
     builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: `
       export function onLanguageDetection(fn) { globalThis.receiveDetection = fn; }
+      export function keepLanguageWatch(fn) { globalThis.keepsWatch = fn; }
+      export async function unwatchLanguage(tabId) { globalThis.unwatched.push(tabId); }
       export async function inspectLanguage(tabId) {
+        globalThis.inspected.push(tabId);
         const value = globalThis.fixtureDetection;
         globalThis.receiveDetection(tabId, value);
         return value;
@@ -47,7 +50,7 @@ function harness(seed = {}) {
     static now() { return Date.now() + clockOffset; }
   }
   const sandbox = {
-    URL, console, AbortController, clearTimeout, fixtureDetection: detection, Date: Clock,
+    URL, console, AbortController, clearTimeout, fixtureDetection: detection, Date: Clock, unwatched: [], inspected: [],
     // Long housekeeping timers (minutes) must not hold the test process open.
     setTimeout: (fn, ms, ...rest) => { const timer = setTimeout(fn, ms, ...rest); if (ms > 60_000) timer.unref(); return timer; },
     chrome: {
@@ -114,7 +117,7 @@ function harness(seed = {}) {
   const turnOff = () => ask({ type: 'SET_AUTO_DUB_SITE', site: 'watch.test', enabled: false });
   // An address change in a page that stays loaded counts once it has stayed changed for a moment.
   const settle = async () => { await new Promise(resolve => setTimeout(resolve, 450)); await flush(); };
-  return { settle, player, offers, withdrawn, reloads, askAs, now: () => Clock.now(), config, ask, starts, lookups, hooks, api, change, flush, sandbox, video, storage, local, navigations, activations, found, status, enable, turnOff,
+  return { settle, player, offers, withdrawn, reloads, askAs, now: () => Clock.now(), config, ask, starts, lookups, hooks, api, change, flush, sandbox, video, storage, local, navigations, activations, closed, found, status, enable, turnOff,
     hostCloses: () => hostCloses, hostIdles: () => hostIdles, advance: ms => { clockOffset += ms; }, sync: () => sync, setSync: value => { sync = value; } };
 }
 
@@ -1264,4 +1267,55 @@ test('"Use this tab" is refused for a site that is off, a tab on a different sit
   assert.equal((await h.status()).tabId, 1);
   assert.equal(h.sync().pairId, 'pair-1', 'the running Dub is left alone');
   assert.equal(JSON.stringify(h.local.autoDubSites), before);
+});
+
+// Watching a tab means its page re-reads its controls on every change. A tab
+// Auto Dub has left must be let go, or SubView follows it to every site it visits.
+test('Auto Dub lets its tab go when the tab leaves the site, and never inspects it on the next site', async () => {
+  const h = harness();
+  await h.enable();
+  await h.flush();
+  assert.equal(h.sandbox.keepsWatch(1), true, 'the armed tab stays watched while Auto Dub is on it');
+  assert.deepEqual([...h.sandbox.unwatched], []);
+  const inspections = h.sandbox.inspected.length;
+
+  h.navigations[0](1, { url: 'https://example.org/' }, { id: 1, active: true, status: 'loading', url: 'https://example.org/' });
+  await h.flush();
+  assert.equal(await h.status(), null, 'Auto Dub detached');
+  assert.deepEqual([...h.sandbox.unwatched], [1], 'and let the tab go');
+  assert.equal(h.sandbox.keepsWatch(1), false, 'nothing keeps it watched');
+
+  h.navigations[0](1, { status: 'complete' }, { id: 1, active: true, status: 'complete', url: 'https://example.org/' });
+  await h.flush();
+  assert.equal(h.sandbox.inspected.length, inspections, 'the new site is never inspected');
+  assert.deepEqual([...h.sandbox.unwatched], [1]);
+});
+
+test('turning the site off, closing the tab, or moving Auto Dub to another tab lets the old tab go', async () => {
+  const off = harness();
+  await off.enable();
+  await off.flush();
+  await off.turnOff();
+  await off.flush();
+  assert.deepEqual([...off.sandbox.unwatched], [1], 'site turned off');
+
+  const closed = harness();
+  await closed.enable();
+  await closed.flush();
+  for (const listener of closed.closed) listener(1);
+  await closed.flush();
+  assert.equal(await closed.status(), null);
+  assert.deepEqual([...closed.sandbox.unwatched], [1], 'tab closed');
+
+  const moved = twoSites();
+  await moved.enable();
+  await moved.flush();
+  moved.sandbox.fixtureDetection = { ...moved.sandbox.fixtureDetection, pageUrl: 'https://other.test/episode/9' };
+  const response = await moved.ask({ type: 'USE_AUTO_DUB_TAB', site: 'other.test', tabId: 2 });
+  await moved.flush();
+  assert.equal(response.ok, true);
+  assert.deepEqual([...moved.sandbox.unwatched], [1], 'the tab Auto Dub moved away from');
+  assert.equal(moved.sandbox.keepsWatch(2), true);
+  assert.equal(moved.sandbox.keepsWatch(1), false);
+  assert.equal(moved.sandbox.inspected.at(-1), 2, 'the new tab is watched');
 });

@@ -10,6 +10,11 @@ interface ContentEntryState {
   controller: VideoController;
   listenerInstalled: boolean;
   stopLanguageObserver?: () => void;
+  /**
+   * The worker let this page go (STOP_LANGUAGE_DETECTION_CONTENT): nothing here
+   * is watched any more, so this frame's media changes have no one to tell.
+   */
+  released?: boolean;
 }
 
 type SetMutedContentRequest = {
@@ -123,6 +128,7 @@ function installContentEntry(): ContentEntryState {
     // Readiness is event-driven: Auto Dub may be armed before an embedded
     // player has loaded metadata. No polling or arbitrary retry delay.
     const mediaChanged = (event: Event) => {
+      if (state.released) return;
       if (!(event.target instanceof HTMLVideoElement) && !(event.target instanceof HTMLIFrameElement)) return;
       try {
         void chrome.runtime.sendMessage({ type: "AUTO_DUB_MEDIA_CHANGED", event: event.type }).catch(() => undefined);
@@ -132,7 +138,19 @@ function installContentEntry(): ContentEntryState {
       document.addEventListener(event, mediaChanged, true);
     }
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (isRecord(message) && message.type === "STOP_LANGUAGE_DETECTION_CONTENT") {
+        if (sender.id !== chrome.runtime.id || sender.tab !== undefined) {
+          sendResponse({ ok: false, error: "Unauthorized content request" });
+          return false;
+        }
+        state.stopLanguageObserver?.();
+        state.stopLanguageObserver = undefined;
+        state.released = true;
+        sendResponse({ ok: true });
+        return false;
+      }
       if (isRecord(message) && message.type === "GET_LANGUAGE_DETECTION_CONTENT") {
+        state.released = false;
         if (!state.stopLanguageObserver) {
           state.stopLanguageObserver = observeLanguage(document, detection => {
             try {

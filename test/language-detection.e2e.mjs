@@ -333,3 +333,49 @@ test("explicit aria state, even false, disables styling inference", testOptions(
     assert.notEqual((await detect(page)).language, "dub");
   });
 });
+
+// A page the size of a busy video site: thousands of elements, a thousand
+// links and buttons, deep wrappers, one player. Detection reads it on every
+// change, on the page's own main thread, so it must stay cheap.
+test("reads a large page quickly and still finds its Sub/Dub switch", testOptions(), async () => {
+  await withPage(`<main id="root"><video style="display:block;width:640px;height:360px"></video>
+    <div role="tablist"><button role="tab" aria-selected="false">Sub</button><button role="tab" aria-selected="true">Dub</button></div>
+    <div id="feed"></div></main>`, async page => {
+    const timings = await page.evaluate(() => {
+      const feed = document.querySelector("#feed");
+      for (let i = 0; i < 1000; i += 1) {
+        // Each card: a chain of wrappers (five deep), spans of text, and a link or a button.
+        let parent = feed;
+        for (let depth = 0; depth < 4; depth += 1) {
+          const wrapper = document.createElement("div");
+          wrapper.className = `card-${depth}`;
+          parent.append(wrapper);
+          parent = wrapper;
+        }
+        const title = document.createElement("span");
+        title.textContent = `Video number ${i} with a longer title about something`;
+        const meta = document.createElement("span");
+        meta.textContent = `${i}K views · ${i % 12} months ago`;
+        const control = document.createElement(i % 2 ? "a" : "button");
+        if (i % 2) control.setAttribute("href", `/watch?v=${i}`);
+        control.textContent = i % 3 ? `Open ${i}` : "Share";
+        parent.append(title, meta, control);
+      }
+      const engine = window.__languageDetectionEngine;
+      const runs = [];
+      let result;
+      for (let run = 0; run < 5; run += 1) {
+        const started = performance.now();
+        result = engine.detectLanguage(document);
+        runs.push(performance.now() - started);
+      }
+      return { runs, language: result.language, available: result.available, elements: document.querySelectorAll("*").length };
+    });
+    assert.ok(timings.elements > 7000, `page has ${timings.elements} elements`);
+    assert.equal(timings.language, "dub");
+    assert.deepEqual(timings.available, ["sub", "dub"]);
+    const median = [...timings.runs].sort((a, b) => a - b)[2];
+    console.log(`detectLanguage on ${timings.elements} elements: median ${median.toFixed(1)} ms (runs: ${timings.runs.map(ms => ms.toFixed(1)).join(", ")})`);
+    assert.ok(median < 50, `median ${median.toFixed(1)} ms`);
+  });
+});

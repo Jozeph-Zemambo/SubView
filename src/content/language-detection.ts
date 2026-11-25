@@ -52,11 +52,82 @@ function visible(element: Element): boolean {
   return !requireLayout || element.getClientRects().length > 0;
 }
 
-/** Players under a root, including inside open shadow roots. */
-function playersIn(root: ParentNode): Element[] {
-  const found = Array.from(root.querySelectorAll(PLAYER));
+/**
+ * One reading of the page (a detection, a selection) asks "is there a player
+ * near this control?" for every candidate control. Finding players means
+ * visiting every element (shadow roots can't be found by selector), so within
+ * one synchronous reading the page's players are found once and the answers
+ * are reused. Nothing is kept between readings: the page changes in between.
+ */
+interface LocatedPlayer {
+  player: Element;
+  /** The player itself, or the outermost shadow host (in the page's own tree) it lives under. */
+  anchor: Element;
+}
+interface ReadingCache {
+  players: Map<Document, LocatedPlayer[]>;
+  scopes: Map<Element, Element[]>;
+  scopeHasPlayer: Map<Element, boolean>;
+  visiblePlayers: Map<Element, boolean>;
+  sole: Map<Document, boolean>;
+  rowTexts: Map<Element, string | null>;
+  serverRows: Map<Document, ServerRow[]>;
+}
+let reading: ReadingCache | null = null;
+
+/** Run synchronous work as one reading of the page; nested calls share the outer reading. */
+function oneReading<T>(work: () => T): T {
+  if (reading) return work();
+  reading = {
+    players: new Map(), scopes: new Map(), scopeHasPlayer: new Map(), visiblePlayers: new Map(), sole: new Map(),
+    rowTexts: new Map(), serverRows: new Map(),
+  };
+  try { return work(); } finally { reading = null; }
+}
+
+function collectPlayers(root: ParentNode, anchor: Element | null, found: LocatedPlayer[]): void {
+  for (const player of Array.from(root.querySelectorAll(PLAYER))) found.push({ player, anchor: anchor ?? player });
   for (const host of Array.from(root.querySelectorAll('*'))) {
-    if (host.shadowRoot) found.push(...playersIn(host.shadowRoot));
+    if (host.shadowRoot) collectPlayers(host.shadowRoot, anchor ?? host, found);
+  }
+}
+
+/** Players under a root, including inside open shadow roots (not the root's own). */
+function playersIn(root: Element): Element[] {
+  const doc = root.ownerDocument;
+  const body = doc.body;
+  if (!reading || !body || !body.contains(root)) {
+    const found: LocatedPlayer[] = [];
+    collectPlayers(root, null, found);
+    return found.map(item => item.player);
+  }
+  let players = reading.scopes.get(root);
+  if (!players) {
+    let all = reading.players.get(doc);
+    if (!all) {
+      all = [];
+      collectPlayers(body, null, all);
+      reading.players.set(doc, all);
+    }
+    // The same players, in the same order, as searching `root` itself would find.
+    players = all.filter(item => item.anchor !== root && root.contains(item.anchor)).map(item => item.player);
+    reading.scopes.set(root, players);
+  }
+  return players;
+}
+
+function visiblePlayer(player: Element): boolean {
+  if (!reading) return visible(player);
+  let shown = reading.visiblePlayers.get(player);
+  if (shown === undefined) reading.visiblePlayers.set(player, shown = visible(player));
+  return shown;
+}
+
+function scopeHasVisiblePlayer(scope: Element): boolean {
+  let found = reading?.scopeHasPlayer.get(scope);
+  if (found === undefined) {
+    found = playersIn(scope).some(visiblePlayer);
+    reading?.scopeHasPlayer.set(scope, found);
   }
   return found;
 }
@@ -68,17 +139,49 @@ function inPlayerContext(element: Element): boolean {
   // keep them hidden until ready, or put them in shadow roots.
   if (!requireLayout) return true;
   const scope = element.closest('main,[role="main"],section,[role="region"]') ?? element.ownerDocument.body;
-  return Boolean(scope && playersIn(scope).some(visible)) || soleMainPlayer(element.ownerDocument);
+  return Boolean(scope && scopeHasVisiblePlayer(scope)) || soleMainPlayer(element.ownerDocument);
 }
 
 /** Sites often put the controls in a different section from the player. With
  * exactly one episode-sized player on the page, the controls are for it. */
 function soleMainPlayer(doc: Document): boolean {
   if (!doc.body) return false;
-  return playersIn(doc.body).filter(player => {
+  const known = reading?.sole.get(doc);
+  if (known !== undefined) return known;
+  const sole = playersIn(doc.body).filter(player => {
     const box = player.getBoundingClientRect();
-    return visible(player) && box.width >= 400 && box.height >= 225;
+    return visiblePlayer(player) && box.width >= 400 && box.height >= 225;
   }).length === 1;
+  reading?.sole.set(doc, sole);
+  return sole;
+}
+
+/** Characters other than spaces and zero-width padding (what `clean` keeps). */
+function visibleLength(text: string): number {
+  return text.replace(/[\s\u200b-\u200d\u2060\ufeff]/g, '').length;
+}
+
+/**
+ * The element's text (as textContent), or null once it holds more than `limit`
+ * characters besides spaces. Labels are short; reading a wrapper's whole
+ * subtree to learn that it isn't one is the expensive part.
+ */
+function shortText(element: Element, limit: number): string | null {
+  // Most elements hold just their own text: read it directly.
+  if (!element.firstElementChild) {
+    const own = element.textContent ?? '';
+    return own.length <= limit || visibleLength(own) <= limit ? own : null;
+  }
+  const walker = element.ownerDocument.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let text = '';
+  let count = 0;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const value = node.nodeValue ?? '';
+    count += visibleLength(value);
+    if (count > limit) return null;
+    text += value;
+  }
+  return text;
 }
 
 /** A link that runs script instead of navigating (href missing, "#…" or javascript:). */
@@ -148,10 +251,25 @@ interface ServerRow {
   servers: Element[];
 }
 
+/** More than either row label pattern can hold, spaces aside ("hd hard sub 1080p:" is 15). */
+const ROW_LABEL_MAX_CHARS = 32;
+
+/** A row label's text, cleaned, or null for anything too big to be one. */
+function rowLabelText(element: Element): string | null {
+  if (element.children.length > 2) return null;
+  const known = reading?.rowTexts.get(element);
+  if (known !== undefined) return known;
+  const text = shortText(element, ROW_LABEL_MAX_CHARS);
+  const value = text === null ? null : clean(text);
+  reading?.rowTexts.set(element, value);
+  return value;
+}
+
 function rowLabel(element: Element): AvailableLanguage | null {
-  if (element.children.length > 2 || element.closest(`${CONTROL},[role="option"]`)) return null;
-  const match = ROW_LABEL.exec(clean(element.textContent));
-  return match ? (/dub/i.test(match[1]) ? 'dub' : 'sub') : null;
+  const text = rowLabelText(element);
+  const match = text === null ? null : ROW_LABEL.exec(text);
+  if (!match || element.closest(`${CONTROL},[role="option"]`)) return null;
+  return /dub/i.test(match[1]) ? 'dub' : 'sub';
 }
 
 function serverLabel(element: Element): string {
@@ -162,8 +280,9 @@ function serverLabel(element: Element): string {
 const SERVER_ROW_LABEL = /^(?:servers?|sources?|providers?|mirrors?)\s*:?$/i;
 
 function anyRowLabel(element: Element): boolean {
-  if (element.children.length > 2 || element.closest(`${CONTROL},[role="option"]`)) return false;
-  return Boolean(rowLabel(element)) || SERVER_ROW_LABEL.test(clean(element.textContent));
+  const text = rowLabelText(element);
+  if (text === null || (!ROW_LABEL.test(text) && !SERVER_ROW_LABEL.test(text))) return false;
+  return !element.closest(`${CONTROL},[role="option"]`);
 }
 
 /** The server buttons next to a row label, or null when they don't look like servers. */
@@ -180,16 +299,22 @@ function labeledButtons(label: Element): { row: Element; servers: Element[] } | 
 }
 
 function serverRows(doc: Document): ServerRow[] {
-  const rows = new Map<Element, ServerRow>();
-  for (const element of Array.from(doc.querySelectorAll(ROW_LABEL_TAGS))) {
-    const lang = rowLabel(element);
-    if (!lang || !visible(element)) continue;
-    const found = labeledButtons(element);
-    if (found && !rows.has(found.row)) rows.set(found.row, { language: lang, servers: found.servers });
-  }
-  const found = [...rows.values()];
-  const kinds = new Set(found.map(row => row.language));
-  return kinds.has('sub') && kinds.has('dub') ? found : [];
+  return oneReading(() => {
+    const known = reading?.serverRows.get(doc);
+    if (known) return known;
+    const rows = new Map<Element, ServerRow>();
+    for (const element of Array.from(doc.querySelectorAll(ROW_LABEL_TAGS))) {
+      const lang = rowLabel(element);
+      if (!lang || !visible(element)) continue;
+      const found = labeledButtons(element);
+      if (found && !rows.has(found.row)) rows.set(found.row, { language: lang, servers: found.servers });
+    }
+    const found = [...rows.values()];
+    const kinds = new Set(found.map(row => row.language));
+    const result = kinds.has('sub') && kinds.has('dub') ? found : [];
+    reading?.serverRows.set(doc, result);
+    return result;
+  });
 }
 
 /** The one current server across all rows: accessible state first, else a
@@ -259,7 +384,7 @@ function popupOptions(listbox: Element | null): Element[] {
 }
 
 function languagePopups(doc: Document): LanguagePopup[] {
-  return Array.from(doc.querySelectorAll(POPUP)).flatMap((trigger): LanguagePopup[] => {
+  return oneReading(() => Array.from(doc.querySelectorAll(POPUP)).flatMap((trigger): LanguagePopup[] => {
     if (!visible(trigger) || !enabled(trigger) || !inPlayerContext(trigger)) return [];
     const name = popupName(trigger);
     if (SERVER_NAME.test(name)) return [];
@@ -273,7 +398,7 @@ function languagePopups(doc: Document): LanguagePopup[] {
     }
     // Closed menu: trust the displayed value only under a Sub/Dub-like name.
     return shown && POPUP_NAME.test(name) ? [{ trigger, current: shown, offered: null }] : [];
-  });
+  }));
 }
 
 function sleep(ms: number): Promise<void> {
@@ -337,8 +462,13 @@ function episodeNumber(element: Element): number | null {
 
 /** Smallest elements that start with an episode label ("EP 01", "Episode 1"). */
 function episodeLabels(doc: Document): Element[] {
-  const labels = Array.from(doc.querySelectorAll('span,div,a,button,li,p,b,strong')).filter(element =>
-    element.children.length <= 2 && episodeNumber(element) !== null && clean(element.textContent).length <= 40 && visible(element));
+  const labels = Array.from(doc.querySelectorAll('span,div,a,button,li,p,b,strong')).filter(element => {
+    if (element.children.length > 2) return false;
+    const text = shortText(element, 40);
+    if (text === null) return false;
+    const value = clean(text);
+    return value.length <= 40 && EPISODE_TEXT.test(value) && visible(element);
+  });
   return labels.filter(element => !labels.some(other => other !== element && element.contains(other)));
 }
 
@@ -455,7 +585,7 @@ function audioReadings(doc: Document): AudioReading[] {
 
 /** Buttons that may open the audio choice, best guess first. */
 function audioTriggers(doc: Document): Element[] {
-  return Array.from(doc.querySelectorAll('button,[role="button"]')).flatMap(element => {
+  return oneReading(() => Array.from(doc.querySelectorAll('button,[role="button"]')).flatMap(element => {
     if (!element.hasAttribute('aria-haspopup') && !element.hasAttribute('aria-expanded')) return [];
     const name = explicitName(element);
     const rank = AUDIO_TRIGGER_NAMES.findIndex(pattern => pattern.test(name));
@@ -464,7 +594,7 @@ function audioTriggers(doc: Document): Element[] {
     if (rank < 0 || SERVER_NAME.test(name) || !element.isConnected || element.closest('[inert]') || !element.closest(PLAYER_AREA) ||
         !enabled(element) || !inPlayerContext(element)) return [];
     return [{ element, rank }];
-  }).sort((a, b) => a.rank - b.rank).slice(0, MAX_AUDIO_TRIGGERS).map(item => item.element);
+  }).sort((a, b) => a.rank - b.rank).slice(0, MAX_AUDIO_TRIGGERS).map(item => item.element));
 }
 
 // What the control said when it was last readable, per page address: closing
@@ -798,6 +928,10 @@ function selectionError(error: string): { ok: false; error: string } {
 
 /** Select one unambiguous semantic language control without following links. */
 function selectLanguage(doc: Document, target: AvailableLanguage, force = false): { ok: boolean; error?: string } {
+  return oneReading(() => selectLanguageNow(doc, target, force));
+}
+
+function selectLanguageNow(doc: Document, target: AvailableLanguage, force: boolean): { ok: boolean; error?: string } {
   const previous = target === 'dub' ? 'sub' : 'dub';
   const detection = detectLanguage(doc);
   if (detection.language === target) return { ok: true };
@@ -831,16 +965,21 @@ function selectLanguage(doc: Document, target: AvailableLanguage, force = false)
 
   const controlGroups = new Map<Element, ControlGroup>();
   const buttonPairs = new Map<Element, Element[]>();
-  const controls = Array.from(doc.querySelectorAll(CONTROL)).filter(element =>
-    element.tagName !== 'SELECT' && visible(element) && enabled(element) && inPlayerContext(element));
-  for (const element of controls) {
-    const group = semanticControlGroup(element);
+  // Reading a label is cheap; visibility and player context are not. Only
+  // controls that name a language matter, and the other controls of a group
+  // that holds one (their selected state counts there).
+  const candidates = Array.from(doc.querySelectorAll(CONTROL)).filter(element => element.tagName !== 'SELECT')
+    .map(element => ({ element, group: semanticControlGroup(element), named: language(label(element)) !== null }));
+  const languageGroups = new Set(candidates.flatMap(item => item.named && item.group ? [item.group] : []));
+  const usable = (element: Element) => visible(element) && enabled(element) && inPlayerContext(element);
+  for (const { element, group, named } of candidates) {
     if (!group) {
-      if (pairable(element) && element.parentElement && language(label(element))) {
+      if (named && pairable(element) && element.parentElement && usable(element)) {
         buttonPairs.set(element.parentElement, [...buttonPairs.get(element.parentElement) ?? [], element]);
       }
       continue;
     }
+    if (!languageGroups.has(group) || !usable(element)) continue;
     const existing = controlGroups.get(group) ?? { group, controls: [] };
     existing.controls.push(element);
     controlGroups.set(group, existing);
@@ -962,13 +1101,17 @@ function looksLikeMenu(element: Element): boolean {
 /** Plain dropdowns: one button showing the current language ("Subbed ▾"),
  * whose list of choices only appears after a click. */
 function menuButtons(doc: Document): Element[] {
-  const buttons = Array.from(doc.querySelectorAll('button,[role="button"]')).filter(element =>
-    !element.matches(POPUP) && visible(element) && enabled(element) && inPlayerContext(element) && language(label(element)) &&
-    !/\d/.test(label(element)) && looksLikeMenu(element) && staysInPage(element));
-  // A lone one only: a visible pair is a switch, not a menu.
-  return buttons.length === 1 && !Array.from(doc.querySelectorAll(MENU_ITEM)).some(item =>
-    item !== buttons[0] && !buttons[0].contains(item) && visible(item) && language(label(item)) && language(label(item)) !== language(label(buttons[0])))
-    ? buttons : [];
+  return oneReading(() => {
+    // The label first: it is cheap, and almost no button names a language.
+    const buttons = Array.from(doc.querySelectorAll('button,[role="button"]')).filter(element =>
+      !element.matches(POPUP) && language(label(element)) && !/\d/.test(label(element)) &&
+      visible(element) && enabled(element) && inPlayerContext(element) && looksLikeMenu(element) && staysInPage(element));
+    // A lone one only: a visible pair is a switch, not a menu.
+    return buttons.length === 1 && !Array.from(doc.querySelectorAll(MENU_ITEM)).some(item => {
+      const kind = language(label(item));
+      return kind && kind !== language(label(buttons[0])) && item !== buttons[0] && !buttons[0].contains(item) && visible(item);
+    }) ? buttons : [];
+  });
 }
 
 /** Visible elements labelled with a language, outermost of any nested copies. */
@@ -981,10 +1124,12 @@ function staysInPage(element: Element): boolean {
 }
 
 function languageItems(doc: Document, target: AvailableLanguage, exclude: Element): Element[] {
-  const items = Array.from(doc.querySelectorAll('body *')).filter(item =>
-    item !== exclude && !exclude.contains(item) && item.children.length <= 4 && visible(item) && enabled(item) &&
-    language(label(item)) === target && staysInPage(item) && inPlayerContext(item));
-  return items.filter(item => !items.some(other => other !== item && other.contains(item)));
+  return oneReading(() => {
+    const items = Array.from(doc.querySelectorAll('body *')).filter(item =>
+      item !== exclude && !exclude.contains(item) && item.children.length <= 4 && language(label(item)) === target &&
+      visible(item) && enabled(item) && staysInPage(item) && inPlayerContext(item));
+    return items.filter(item => !items.some(other => other !== item && other.contains(item)));
+  });
 }
 
 async function selectFromMenuButton(doc: Document, target: AvailableLanguage): Promise<{ ok: boolean; error?: string; at?: number }> {
@@ -1011,9 +1156,11 @@ async function selectFromMenuButton(doc: Document, target: AvailableLanguage): P
 }
 
 function providerSelect(doc: Document): HTMLSelectElement | null {
-  const controls = Array.from(doc.querySelectorAll<HTMLSelectElement>('select')).filter(select =>
-    visible(select) && enabled(select) && inPlayerContext(select) && /\b(?:provider|server)\b/i.test(label(select)));
-  return controls.length === 1 && !controls[0].multiple ? controls[0] : null;
+  return oneReading(() => {
+    const controls = Array.from(doc.querySelectorAll<HTMLSelectElement>('select')).filter(select =>
+      /\b(?:provider|server)\b/i.test(label(select)) && visible(select) && enabled(select) && inPlayerContext(select));
+    return controls.length === 1 && !controls[0].multiple ? controls[0] : null;
+  });
 }
 
 export interface ProviderOption {
@@ -1023,20 +1170,23 @@ export interface ProviderOption {
 
 /** Servers of the row in use: the current server's row, else the Dub row. */
 function activeServerRow(doc: Document): { row: ServerRow; current: Element | null } | null {
-  const rows = serverRows(doc);
-  if (!rows.length) {
-    // One plain "Server:" row; the language switch lives elsewhere.
-    const plain = Array.from(doc.querySelectorAll(ROW_LABEL_TAGS))
-      .filter(element => visible(element) && anyRowLabel(element) && !rowLabel(element))
-      .map(labeledButtons).filter((item): item is { row: Element; servers: Element[] } => Boolean(item));
-    const unique = [...new Map(plain.map(item => [item.row, item])).values()];
-    if (unique.length !== 1) return null;
-    const row: ServerRow = { language: 'dub', servers: unique[0].servers };
-    return { row, current: currentServer([row]) };
-  }
-  const current = currentServer(rows);
-  const row = rowOf(rows, current) ?? rows.find(item => item.language === 'dub');
-  return row ? { row, current } : null;
+  return oneReading(() => {
+    const rows = serverRows(doc);
+    if (!rows.length) {
+      // One plain "Server:" row; the language switch lives elsewhere.
+      // The label test first: it rules out nearly every element without layout work.
+      const plain = Array.from(doc.querySelectorAll(ROW_LABEL_TAGS))
+        .filter(element => anyRowLabel(element) && !rowLabel(element) && visible(element))
+        .map(labeledButtons).filter((item): item is { row: Element; servers: Element[] } => Boolean(item));
+      const unique = [...new Map(plain.map(item => [item.row, item])).values()];
+      if (unique.length !== 1) return null;
+      const row: ServerRow = { language: 'dub', servers: unique[0].servers };
+      return { row, current: currentServer([row]) };
+    }
+    const current = currentServer(rows);
+    const row = rowOf(rows, current) ?? rows.find(item => item.language === 'dub');
+    return row ? { row, current } : null;
+  });
 }
 
 /** List the options of the single accessible Provider/Server control, if any. */
@@ -1113,6 +1263,10 @@ function candidate(raw: string | null, base: string, text: string): DubCandidate
 
 /** Read semantic controls only. Never click a control or infer a stream URL. */
 export function detectLanguage(doc: Document): LanguageDetection {
+  return oneReading(() => detectLanguageNow(doc));
+}
+
+function detectLanguageNow(doc: Document): LanguageDetection {
   const result: LanguageDetection = {
     pageUrl: doc.location?.href ?? doc.URL,
     language: 'unknown', available: [], dubCandidates: [], provider: null,
@@ -1169,8 +1323,12 @@ export function detectLanguage(doc: Document): LanguageDetection {
     for (const lang of popup.offered ?? ['sub', 'dub'] as const) available.add(lang);
   }
 
+  // The label first: it is cheap, and a page has thousands of links and
+  // buttons of which a handful name a language. Peers below are only ever
+  // compared by language, so controls without one never mattered here.
   const controls = Array.from(doc.querySelectorAll(CONTROL)).filter(element =>
-    element.tagName !== 'SELECT' && !element.matches(POPUP) && visible(element) && enabled(element) && inPlayerContext(element));
+    element.tagName !== 'SELECT' && !element.matches(POPUP) && language(label(element)) &&
+    visible(element) && enabled(element) && inPlayerContext(element));
   for (const element of controls) {
     const lang = language(label(element));
     if (!lang) continue;
@@ -1238,12 +1396,19 @@ export function detectLanguage(doc: Document): LanguageDetection {
   return result;
 }
 
+/**
+ * Busy pages (animated players, live feeds) mutate many times a second. One
+ * reading per this many milliseconds is plenty for a control a person clicks,
+ * and keeps the page's own main thread free.
+ */
+const OBSERVE_DELAY_MS = 150;
+
 /** Observe only; document events/mutations drive updates, not polling timers. */
 export function observeLanguage(doc: Document, callback: (result: LanguageDetection) => void): () => void {
   let previous = '';
   let stopped = false;
   let suspended = false;
-  let queued = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
   const emit = () => {
     if (stopped || suspended) return;
     const result = detectLanguage(doc);
@@ -1252,22 +1417,30 @@ export function observeLanguage(doc: Document, callback: (result: LanguageDetect
     previous = signature;
     callback(result);
   };
+  // Changes gather for a moment, then one reading covers them all. The wait
+  // starts at the first change and is not pushed back by later ones, so a
+  // page that never stops changing is still read.
   const schedule = () => {
-    if (stopped || suspended || queued) return;
-    queued = true;
-    queueMicrotask(() => { queued = false; emit(); });
+    if (stopped || suspended || timer !== null) return;
+    timer = setTimeout(() => { timer = null; emit(); }, OBSERVE_DELAY_MS);
+  };
+  const cancel = () => {
+    if (timer !== null) clearTimeout(timer);
+    timer = null;
   };
   const relevant = (node: Node): boolean => {
     const element = node.nodeType === 1 ? node as Element : node.parentElement;
     return Boolean(element && (element.matches(`${CONTROL},${POPUP},${PLAYER},${AUDIO_GROUP},${AUDIO_OPTION},option,label`) || element.closest(`${CONTROL},${POPUP},${AUDIO_GROUP}`) || element.querySelector(`${CONTROL},${POPUP},${PLAYER},${AUDIO_GROUP}`)));
   };
   const observer = new MutationObserver(records => {
+    // A reading is already on its way: it will see these changes too.
+    if (stopped || suspended || timer !== null) return;
     if (records.some(record => relevant(record.target) || [...record.addedNodes, ...record.removedNodes].some(relevant))) schedule();
   });
   const connect = () => observer.observe(doc, { subtree: true, childList: true, characterData: true, attributes: true,
     attributeFilter: ['aria-selected', 'aria-checked', 'aria-pressed', 'aria-current', 'checked', 'selected', 'value', 'href', 'disabled', 'hidden', 'inert', 'aria-hidden', 'style', 'class', 'src', 'aria-label', 'aria-labelledby', 'label', 'type', 'name', 'role'],
   });
-  const hide = () => { suspended = true; observer.disconnect(); };
+  const hide = () => { suspended = true; observer.disconnect(); cancel(); };
   const show = () => { if (!stopped) { suspended = false; connect(); schedule(); } };
   doc.addEventListener('change', schedule, true);
   doc.addEventListener('input', schedule, true);
@@ -1281,6 +1454,7 @@ export function observeLanguage(doc: Document, callback: (result: LanguageDetect
   emit();
   return () => {
     stopped = true;
+    cancel();
     observer.disconnect();
     doc.removeEventListener('change', schedule, true);
     doc.removeEventListener('input', schedule, true);
