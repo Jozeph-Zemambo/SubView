@@ -1,21 +1,33 @@
-# SubView — Video Sync
+# SubView4Dub
 
-Chrome Manifest V3 extension for synchronizing a visible HTML5 video with extension-owned background audio, or with a second video tab.
+Watch subtitled video while listening to dubbed audio in sync.
 
-Watch a subtitled video while hearing its dubbed audio: turn SubView on for a site, and when the page offers both Sub and Dub it plays the Dub's sound in time with the video on your screen. Your tab stays on Sub.
+Turn SubView4Dub on for a site, and it plays the dubbed audio track in time with the subtitled video on your screen. Your visible tab stays on Sub with full dialogue subtitles and translated on-screen text.
+
+## Features
+
+- **Opt-in per site:** Off everywhere by default until you click the power burst for a site.
+- **Automatic sync:** Follows play, pause, seeks, and playback speed without touching your visible tab.
+- **Works across player layouts:** Detects both in-player audio language menus and classic Sub/Dub selectors, with no hardcoded websites.
+- **Built-in mixer:** Per-site Dub volume, mute original audio, +/-0.5 s timing nudges, Auto Offset for intro differences, and one-click tab switching.
+- **Manual mode (Debug tools):** Sync any two HTML5 video tabs or pair a video with a direct audio/HLS URL.
+
+> **Note:** On subscription streaming services, Auto Dub uses a second player stream, so your plan must allow at least two concurrent streams.
 
 ## Install
 
-SubView isn't on the Chrome Web Store. To install it:
+Requires Chrome 119 or newer.
 
-1. Download `subview-<version>.zip` from the [latest release](https://github.com/Jozeph-Zemambo/SubView/releases/latest) and unzip it somewhere you'll keep it.
-2. Open `chrome://extensions` and switch on **Developer mode** (top right).
-3. Click **Load unpacked** and choose the unzipped folder.
-4. Open a video page, click the SubView icon, and press the burst to turn it on for that site.
+1. Download `subview-<version>.zip` from the [latest release](https://github.com/Jozeph-Zemambo/SubView/releases/latest) and unzip it to a folder you will keep.
+2. Open `chrome://extensions` and enable **Developer mode** (top right).
+3. Click **Load unpacked** and select the unzipped folder.
+4. Open a video page, click the SubView4Dub icon, and tap the burst to turn it on for that site.
 
-Needs Chrome 119 or newer. Chrome doesn't update extensions installed this way, so the popup shows a yellow note at the bottom when a newer release is out. To update, download the new zip, replace the folder's contents, and click **Reload** on SubView's card in `chrome://extensions`.
+Unpacked copies show a yellow notice in the popup when a newer GitHub release is available. To update, replace the folder's contents and click **Reload** in `chrome://extensions`.
 
-SubView collects nothing and has no servers. Its one outside request is that version check: at most once a day, when you open the popup, it asks GitHub for the latest release number. See [PRIVACY.md](PRIVACY.md). It doesn't download or save video or audio. Manual background audio from a direct media URL (Debug tools) doesn't handle DRM-protected streams; Auto Dub instead runs the site's own player inside the extension, so copy-protected video can play there, subject to each service's limit on how many streams an account may play at once.
+## Privacy
+
+SubView4Dub collects no personal data, has no backend servers, no accounts, and no ads. Unpacked installs check GitHub at most once a day for a newer release number; Chrome Web Store installs make no outside requests. See [PRIVACY.md](PRIVACY.md).
 
 ## Local development
 
@@ -26,139 +38,6 @@ npm test
 npm run build
 ```
 
-Then open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select the generated `dist/` directory.
+Load the generated `dist/` folder via **Load unpacked** in `chrome://extensions`.
 
-After rebuilding an already loaded extension, click **Reload** on its extension card and refresh the video page. Chrome 119 or newer is required (offscreen lifecycle API, and content scripts in about:blank/blob frames for hosted Dub pages).
-
-## Popup
-
-The popup (`src/popup/popup.*`) is the everyday control: one power button that turns Auto Dub on or off for the current site, a status line, a readout of the Dub **server** and where the audio comes from (hidden copy or minimized window), Dub volume, mute original audio, Dub timing (offset, in seconds) and auto offset. Settings apply live while a Dub plays in that tab and are saved for the site. The look is "Manga Pop" and follows the system theme: light is Classic Ink (yellow burst, pink lettering, blue buttons); dark swaps the roles (pink burst, yellow lettering). Fonts (Dela Gothic One, Zen Kaku Gothic New; SIL Open Font License, latin subsets) are bundled in `src/popup/fonts/`, so the popup page itself loads nothing from the network. The new-version note (`src/background/update-check.ts`, `src/shared/update.ts`) is fetched by the background worker, only for copies loaded from a folder. Design explorations are in `design/`.
-
-**Debug tools** (link at the bottom; `debug.html`) is the original full popup: manual background audio from a media URL, two-tab sync, tab and video pickers, language detection details and Scan again. `popup.html?tab=<id>` opens the popup for a specific tab (used by tests).
-
-## Background audio (first milestone)
-
-Choose **Background audio**, select the visible tab/video, paste a direct playable HTTP(S) media URL, and start. The extension's offscreen video element supplies the audio without opening another website tab. Volume and **Mute original video** can be changed while active. The mute preference defaults on and is remembered locally. The popup can be closed.
-
-The source must be native playable media (for example, supported MP4, WebM, MP3 or WAV), or an HLS `.m3u8` manifest. HLS playback uses locally bundled hls.js, not executable code from a CDN. An episode webpage URL is not a media URL. DASH and DRM-specific sources are not supported. Streams may still reject extension-origin requests or require authentication; those failures are reported rather than bypassed.
-
-When **Mute original video** is on, the visible video is muted only after background audio starts successfully. Turning it off releases the extension's mute and restores the previous state; it does not forcibly unmute a video the user already muted. Stop restores that state and closes the hidden player. Playback failure restores the visible video's sound; closing/navigating the visible tab stops the session. Chrome may close the hidden document after 30 seconds of audio inactivity; a subsequent visible media event restores it from the saved source and sync state. No silent keepalive or fixed recovery timer is used.
-
-The playback/synchronization core contains no site-specific selectors or provider assumptions. Video discovery includes accessible embedded frames. Frame/document identifiers keep controls attached to the selected player, rather than another frame with the same local video ID. Any future site-specific adapter should be explicit and separate from this core.
-
-## Automatic language detection (second milestone, detection layer)
-
-Opening the popup defaults to the current HTTP(S) tab when no session or explicit selection exists. Selecting a primary tab starts read-only detection of its Sub/Dub controls, independently of whether a top-level video was found. The popup shows the selected language, Dub availability, selected provider when exposed, and any actual Dub links exposed by the controls. Changes update automatically, including navigation in the inspected tab. Only explicitly inspected tabs and Auto Dub's temporary lookup tabs are watched; there is no injection into unrelated tabs. The watcher registration lasts for the browser session and is removed when the tab closes.
-
-The detector uses generic native selects and semantic selected/checked/pressed controls. No site hostname or generated CSS class is hard-coded. Plain text mentions, ambiguous choices, or conflicting selected controls return **Unknown**. A `dub` option value is a language identifier, not a media URL; it is never turned into a guessed link. Page links and direct-media candidates are distinguished. Detection alone never starts playback.
-
-DOM events/mutations drive detection updates; silent JavaScript property changes without events or DOM changes require a rescan. Language controls are inspected in the top document, while video discovery independently probes accessible frames. Closed shadow-root video elements are not supported.
-
-Concurrent inspections of the same page share one pending detection request. Only navigation or tab closure invalidates that page generation; another scan no longer produces a false **The page changed during detection** error. Old-document results are still rejected after real navigation.
-
-An explicit **Scan again** retries a failed Dub lookup and rechecks language if the previous detection failed. Ordinary media events do not continuously retry failures, and a scan during an active lookup does not open a duplicate temporary tab.
-
-### Auto Dub (hosted Dub page)
-
-Auto Dub is off by default and is turned on **per site**, like an ad blocker's allowlist: **Turn on Auto Dub for <site>** saves the site (and that site's volume, offset and mute settings) in `chrome.storage.local`, so it survives browser restarts. Auto Dub then attaches to whichever tab you switch to on an enabled site, including after a restart; while it is playing Dub in one tab it stays there rather than following you to a tab you are only browsing. Per site it also remembers which Dub server played (tried first next time) and which failed (tried last for 24 hours). While the attached tab shows Sub and the episode has a Dub option, SubView loads **a copy of the same episode page inside the extension's offscreen document**, selects Dub there with the page's own controls, and syncs that copy's video to the visible one. The visible tab is never touched. Nothing extracts or re-fetches stream URLs: the site's own player loads its own media, so provider-specific tricks (signed tokens, Referer checks, blob playlists, disguised segments) are handled by the site's code.
-
-How it works (`src/background/auto-dub.ts`, `hosted-dub.ts`, `hosted-host.ts`):
-
-1. Load the episode URL in an iframe in the offscreen document (`src/host/mount.ts`). Session header rules, scoped to this container: the episode page gets its own site as `Referer`; `X-Frame-Options`/`Content-Security-Policy` are removed only from frames on the episode's site and from frames that the episode page (or a player already hosted in it) requests. Each hosted frame adds its site to that list when it starts, so a player's own sub-frames work, while frames requested by anything else (another extension, for example) never match.
-2. Two content scripts are registered **only while a hosted page exists**, and act only in frames whose top-most ancestor is an extension page:
-   - `hosted/hosted-shim.js` (page world): offscreen documents never lay out or paint, so it reports the page as visible, gives zero-size elements and observers a player-sized box, and runs `requestAnimationFrame` from a timer. It also gives the copy **private storage writes** (`localStorage`/`sessionStorage` reads fall through, writes stay in memory) and namespaces `BroadcastChannel`, so selecting Dub never flips the user's own tabs to Dub.
-   - `hosted/hosted-agent.js` (isolated world, exact extension-id check): exposes the frame's videos and Sub/Dub/Server controls to the worker over a runtime port. Frames without a tab can't receive `tabs.sendMessage`, and offscreen frames have no `documentId`, so each agent names its frame with a random key. It keeps every video muted until the worker activates the chosen one.
-3. Wait for the copy's Sub video to finish loading (so a late Sub load can't pass for Dub), select Dub, then take the episode-length video that started loading after the selection (`src/shared/hosted-selection.ts`). If the page has a Server/Provider control, the Dub server in the same family as the user's Sub server is preferred (`alpha · embed · s-sub` → `alpha · embed`); a server that doesn't load within 25 s is replaced by the next one.
-4. Link it as the secondary endpoint (`tabId` `-2`, addressed by frame key). Sub leads; Dub follows play, pause, seek and speed.
-
-**Pages that refuse to run inside another page.** Some pages check whether they are in a frame; if so they try to take over the whole window, and when the browser refuses they send themselves to an error screen. A hidden copy that ends up with no player and no controls (the fast case: it also left the episode's address, noticed after 4 s) is loaded once more in a *lenient* frame, which is allowed to make that takeover attempt. The offscreen document cannot be navigated, so the attempt does nothing and the page carries on as if it had worked. The site then remembers this (`lenientFrame` in its saved settings), so later episodes skip the failed first try. The lenient frame is a retry and never the default: it uses a `sandbox` attribute, which is itself something other players look for and refuse.
-
-If the player won't start in the offscreen document, the same hosted page (same shim and storage isolation) opens in a **minimized extension window** as a fallback. A page of the kind above *can* take over that window; SubView then closes the window and reports it, instead of leaving the site playing in a stray window. The popup says which one is in use: **Hidden Dub page** or **Minimized Dub window**. If the Dub stops playing (the copy's player failed or its window closed), it's reloaded once per episode, then reported. A new episode URL closes the old copy and loads the new one. Replacing the visible video relinks the existing copy without reloading it.
-
-Detection and selection are generic (native selects and semantic tab/radio controls), with no site hostnames or CSS classes. Inside hosted copies, visibility checks use attributes and computed style instead of layout boxes, since those documents never lay out.
-
-#### Players that choose audio by language
-
-Some services carry one episode with several audio languages instead of separate Sub and Dub versions: the player has a control named "Audio" whose options are languages ("Japanese", "English"). There, **Dub means audio in the browser's preferred language** and any other selected language counts as Sub. Nothing about a particular service is hard-coded; the pattern is the control's accessible name and roles (`src/content/language-detection.ts`, "audio chosen by language").
-
-- These menus usually exist only while open, and opening one in your tab would be visible. So your tab reports "can't tell" and the hidden copy opens the menu, reads it and chooses your language. If the copy turns out to be on your language already, Auto Dub waits ("already playing audio in your language") instead of failing, and **keeps that copy open, paused**, for up to 10 minutes. Once your own tab's menu has been seen on the original language, the kept copy *is* the Dub: nothing is pressed and nothing new is loaded, so it links at once. This matters on players that start every page load on their default audio, where your tab is switched by hand and a fresh copy never is. It also matters for stream limits; see "Streams left behind" below. A copy found on your language is never linked on its own say-so, whether it was just loaded, kept, or picked up again after the browser restarted SubView's background worker: only your tab reading as the original language makes it the Dub.
-- **Next episode.** A reading of the original language follows you to the next episode when you get there inside the same app (the address changes, the page doesn't reload): players keep the audio choice while the page stays loaded, and the closed menu on the new address wouldn't say so. Without this, the fresh copy's "already in your language" was taken for your tab's state and Dub never started on episode two. A reading of *your* language is not carried, because being wrong there would keep Auto Dub off; and a reload starts with nothing, as the player itself does.
-- The control is found through a button named for audio, language or tracks, else through the player's settings button, and only inside an element the page names for its player (so a site's own interface-language menu is never mistaken for it). Players hide their control bar while idle; the button counts even then. A menu that turns out to hold no audio choice is closed again.
-- Audio description tracks ("English [AD]") are never chosen.
-- **Account settings stay yours.** Some services save the audio language to your account the moment it is chosen. While the hidden copy presses that control (and for 6 s after), its `PATCH` and `PUT` requests are dropped by a session rule scoped to the hidden container and the sites loaded in it (`guardSettingsWrites` in `hosted-host.ts`), so your next episode still opens in the language you chose. Requests that play video use other methods.
-- **In-place switches.** Where choosing a language swaps the sound without loading a new video, the usual proof ("a video that started loading after the choice") never arrives. The copy's own control showing your language selected, with no new load 4 s later, is accepted instead.
-
-**Checked on real services (2026-11-18, in a logged-in browser):**
-
-- *A service that gives each audio language its own address and saves the choice to the account.* Works in the hidden document: the copy-protected video loads there, the copy switches to the viewer's language with the account save blocked, and the Dub follows play, pause and seeks in both directions, staying within about 0.1–0.2 s. The viewer's tab stays on the original language and the account default is unchanged afterwards. It needs a plan that allows a second stream: on a one-stream plan the service answers the hidden copy with a "stream limit" message instead of a video.
-- *A service whose audio switches in place, and whose page refuses to run in a frame* (rechecked 2026-11-21). Works in the hidden document through the lenient frame: first episode about 8 s to a ready copy (4 s of that is the failed plain try), later ones skip it. Every page load starts on the service's default audio and forgets the last choice, so the copy opens on the viewer's language and is kept; when the viewer switches their tab to the original language the Dub links at once. It then followed seeks in both directions (back in step in about 1 s) and pause/play, staying within about 0.1–0.2 s, for five minutes with the viewer's tab never interrupted. This service allows two streams at once, which is exactly the viewer's tab plus the copy: another device watching at the same time will stop one of them.
-- *A background tab is not an alternative.* A real second tab was built and measured as a container (2026-11-20): the browser does not load video in a tab that has never been on screen, so it would have to be shown for a moment on every episode. It was not kept.
-
-- **Press only once the player can play.** A player that is still starting can take the audio choice, and save it, without acting on it: pressed while its video had only metadata (about three seconds after the page started, as the player was fetching its licence), the first service above saved the preference and never switched. So where the choice is an audio menu inside the player, the hidden copy presses only once its video can play (`readyState` 3 or higher; `PLAYABLE` in `hosted-dub.ts`). No further delay is needed: in nine runs on the real service the press landed 183–208 ms after "can play" and the Dub was linked 3.7–6.9 s after Auto Dub was turned on. An earlier fixed 8 s wait is gone.
-- **Streams left behind.** Closing a hidden copy (or an ordinary tab) doesn't release its stream on the service's side at once. Six lookups within about three minutes got the next ones refused with the service's stream-limit message for a few minutes; a minute apart, three in a row were fine. Ordinary viewing, one episode after another, is far slower than that. On the second service above the limit is enforced the other way round: starting a third player stops the **oldest** one, even when the second was closed seconds earlier, and the oldest is the viewer's own tab ("You are currently watching a video on another device"). A copy that was opened, closed and replaced a moment later did exactly that; one player closed 7 s before still counted, one closed about 2.5 minutes before did not. That is why a copy that opens on the viewer's language is kept and reused rather than closed.
-- **One copy per playback, or wait.** The service above learns about players from a heartbeat each one sends every 15 s, and goes on counting a closed one for a while: a second copy opened 15 s or 45 s after the first closed got the viewer's tab stopped about 20 s later; at 90 s it did not. So when the visible video is copy-protected (encrypted media: the mark of a service that counts streams at all), a second hidden copy for the *same playback* waits until 100 s after the last one closed, and the popup says so. This covers turning the site off and on, reloading a stuck Dub, and a kept copy that timed out. A new episode or a reloaded tab is a new playback, younger than the old copy, so the service drops the dead players first and nothing waits. That last fact is the way out of the wait: while it runs, SubView offers to reload the tab, as a card on the page itself (the viewer is looking at the video, not at the popup; `src/background/reload-offer.ts`) and as a button in the popup. Either one reloads the tab and the copy loads at once. The popup's **Reload tab for Dub** switch, or **Always reload** on the card, lets SubView do that by itself on that site from then on, once per wait. It is off until allowed, because a reload drops fullscreen.
-
-  A reload SubView asked for puts the viewer back where they were. Players often come back from a reload on their defaults: the viewer's own language instead of the original, subtitles off, a saved position some way back, paused. So before the reload SubView notes the position, whether the video was playing, and what each of the player's menus has chosen; once the reloaded player can play, it chooses the same options again, seeks back and resumes (`src/content/player-state.ts`). This is the one case where SubView presses controls in the viewer's own tab, and only to undo what its own reload did. It knows no site: a choice is any named menu, list or select with exactly one option chosen, found in the player or opened by one of the player's own buttons, and it is put back by the names the page gives the group and the option. Server and quality pickers are left alone. A reload the viewer does themselves is not touched.
-
-  Reading and pressing those menus follows what the player's own button says: a button with `aria-expanded` is believed about whether its menu is open, because a closed panel often stays in the page fully transparent, and one that has just opened can be transparent too (a fade-in does not advance in a tab that is not on screen). The menu is opened once, everything is chosen in it, and it is closed again. If the browser refuses to start the video (it does for a page nobody has clicked, in a tab that is not being looked at), the video stays paused and is started when the viewer comes back to the tab.
-
-  Two rules keep that from turning into a loop. While the put-back is pressing the player, nothing is decided from what the menus show on the way: reopened settings still show the player's default (the viewer's own language) for a moment, and acting on that would close the copy, start a new wait and, where reloads are allowed, reload again. For the same reason a menu read as the viewer's language no longer closes a copy that is still loading; it ends up kept. And an automatic reload is never repeated within five minutes of any reload SubView made: a second wait in that time shows the card instead. The time of the last reload is saved in session storage, not kept in the worker's memory: Chrome stops an idle worker after about half a minute, and the guard first failed on a real service for exactly that reason. (Found the hard way on a real service on 2026-11-23: a tab reloaded three times in about 20 s and the service signed the account out.) For the same reason a failed hidden copy on such a service is reported rather than followed by the minimized window, which would be one more player.
-
-- **An address that comes straight back is not a new page.** Some apps change the address and restore it milliseconds later (a "back" with nowhere to go redirects to itself). The episode never left, but treating it as a new page closed the hidden copy, and on a service that counts streams that meant a wait (and the reload card) for the very episode still on screen. Chrome reports a router's address change exactly like the start of a page load, so the detection host asks whether the document that was there still answers: if it does, its placeholder reading is marked `placeholder: "address"` and Auto Dub ignores it, gives the address 400 ms to stay changed, and holds any reading of the new address until then. A page that really went away (`placeholder: "load"`) is acted on at once.
-
-#### When the page in the hidden copy refuses
-
-If a lookup fails and the page in the hidden copy is showing an alert or dialog where its player is ("Stream limit reached", "Not available in your region"), that text is added to the error: *The page in the hidden copy says: “…”*. Site-wide dialogs (cookie banners) don't count. In that case the minimized fallback window is not tried: it would be told the same thing, and on services that count streams it would use up one more.
-
-#### Seeking through the page's timeline
-
-Some players only load a new position when the seek comes through their own timeline: assign `currentTime` to a spot they haven't loaded and the video waits forever. When the target isn't loaded and the page has a standard timeline (one range input as long as the video), SubView seeks through that with the events a pointer drag produces, then finishes with an exact seek once the player has loaded around the target (`src/content/timeline-seek.ts`). Pages without such a timeline, and targets already loaded, get a plain seek as before.
-
-### Looking inside the hidden copy (Debug tools)
-
-A site that fails in the hidden copy usually fails for a reason only visible inside it. From the Debug tools page's console:
-
-```js
-await chrome.runtime.sendMessage({ type: "DESCRIBE_HOSTED" })                  // while a hidden copy is open
-await chrome.runtime.sendMessage({ type: "SET_HOSTED_DEBUG", enabled: true })  // then also record a trail
-```
-
-`DESCRIBE_HOSTED` returns, per frame of the copy: its address and title, the start of its text, its videos, the menus it has, what the detector reads, and any notice in the player area. With hosted debug on, the next hidden copy also loads `hosted/hosted-trail.js`, which records failed requests, script errors, the sockets and workers the page opens, and the call stack that started each navigation, carried across one page change. That is how the frame check above was found. It is off by default and wraps nothing in the page unless switched on (`src/background/hosted-diagnostics.ts`).
-
-Limits: cookies set by the copy (including HTTP `Set-Cookie`) and IndexedDB writes are not isolated; storage isolation covers `localStorage`, `sessionStorage` and `BroadcastChannel`. Sites that block framing in script (frame-busting), require a login that only a top-level tab can complete, or allow only one stream at a time on the viewer's plan may fail in both containers; the popup reports the reason. Copy-protected (encrypted) video itself does load in the hidden document, as described above; what stops it on a one-stream plan is the service's stream limit, not the encryption. Networks that filter streaming hosts affect Chrome traffic generally, not SubView specifically.
-
-## Synchronization and two-tab fallback
-
-Background audio (hidden player or Auto Dub's retained tab) is one-way: the visible Sub video leads and Dub follows. Buffering never transfers control to Dub, and Dub controls cannot seek, pause, or change the speed of Sub. Normal synchronization sends no playback commands to Sub. The explicit Auto Offset lead-in adjustment on setup or enabling the setting remains supported; it is not repeatedly imposed when the user seeks. Manual two-tab sync retains its bidirectional behavior.
-
-### Auto offset
-
-The Timing section has an **Auto offset** switch, off by default. Off uses the retained manual offset. On assumes the longer version has extra material at its beginning and calculates `secondary duration − primary duration + manual correction`. It skips that initial excess in the longer player; it does not identify intros, credits, or matching scenes. The setting applies to background audio, Auto Dub, and two-tab sync. Manual correction remains available while Auto offset is on; the buttons adjust Dub without moving Sub. Switching Auto offset off uses the manual correction alone. The popup expresses this as Dub delay: positive delays Dub and negative advances it.
-
-Both lengths must be finite and known. Until then, the manual offset remains in use and the popup says **Waiting for video lengths**; metadata events drive the calculation, not a delay. For example, Sub at 23:37.184 and Dub at 24:04.769 gives +27.585 seconds: Dub starts that far ahead of Sub. A longer primary video instead skips its own initial excess.
-
-- Choose a primary and secondary tab from the popup.
-- Choose one detected `<video>` element in each tab, including accessible embedded frames.
-- Enter a signed Dub delay as `hh:mm:ss`; positive values delay Dub and negative values advance it.
-- Play, pause, seek, and playback-rate changes are translated through a revisioned canonical timeline.
-- A video that ends or buffers does not pause the other video. It can rejoin when the canonical position returns to its playable range.
-- Audible `play()` calls can still be rejected by Chrome autoplay policy; the popup reports when manual play is required.
-
-Privileged Chrome pages and Safari packaging are not supported.
-
-## Tests
-
-- `npm test`: unit tests (sync core, controller, detection host, Auto Dub coordinator, hosted video/server selection, offsets, HLS failure formatting).
-- `npm run test:hosted`: four runs of the built extension against local sites. The fourth (`test/reload-offer.e2e.mjs`) is a page with copy-protected video: it checks that a second copy for the same playback offers a reload on the page and in the popup, that a click made by the page's own scripts is ignored, that **Reload now** links Dub without the wait, and, on a player that forgets everything on reload and whose hidden copy loads slowly, that an allowed site reloads by itself exactly once with no card, that audio, subtitles, position and playing are put back with the settings opened once, and that a second wait moments later shows the card instead of reloading again. The third (`test/frame-check-hosted.e2e.mjs`) is a page that refuses to run in a frame: it checks that the plain try gives up quickly, that the lenient retry links Dub in the same hidden document with no window opened, that the next episode skips the failed try, and that a stricter page which takes over the fallback window is closed and reported rather than left behind. The second (`test/audio-language-hosted.e2e.mjs`) covers players that choose audio by language, in two shapes: a track menu that saves to the account and moves to another address, and a settings panel whose audio switches in place. It checks that the hidden copy chooses the viewer's language, that the account save never reaches the server, that the viewer's tab, address and localStorage are untouched, and that a page already on the viewer's language waits without opening a fallback window. The first run is a local site shaped like the hard live cases: a cross-origin player frame that refuses framing (`X-Frame-Options`/`frame-ancestors`), loads only once it is on screen and has painted, a language preference in `localStorage`, and other tabs that follow it through `storage` events. Checks that Dub is selected in the offscreen copy, the visible tab and its storage stay on Sub, drift stays small, seek/pause follow, and Disable removes the copy, its header rules and its scripts.
-- `npm run test:playback`, `test:hls`, `test:detection`, `test:auto-offset`: manual background audio, HLS decoding, detection/selection fixtures (including `test/audio-language.e2e.mjs` for audio-by-language menus) and offsets.
-- `npm run test:live -- <watchUrl> [subServer] [--quick]`: the built extension against a real site (headless, muted). It selects Sub (and a Sub server by value or family name), enables Auto Dub, then plays/seeks/pauses/changes speed while sampling drift through the worker's `subviewDiagnostics.sampleSyncDrift()`. Needs network and a site that is up; not part of `npm test`.
-
-Set `CHROMIUM_PATH` to a Chrome for Testing (or Chromium) executable for the browser tests. `playwright-core` does not download browsers.
-
-## Fine sync
-
-Background Dub is corrected by seeking only when it is more than 350 ms off. Below that, the worker compares the two videos' positions at a common instant (snapshots carry capture timestamps) and nudges the Dub's playback speed by up to ±4% until it is within 15 ms, then returns it to normal speed. Speed-only commands carry no target time, so they never seek.
-
-## History
-
-Until 2026-09-30 Auto Dub found the Dub by opening a lookup tab and reconstructing the provider's stream URL (JW Player getters, request capture, blob playlist graphs, Referer rules), then replayed it in the offscreen player, with a retained Dub tab as fallback. Each new provider needed another fix. The hosted-page design replaced that pipeline; the old code is kept in a local backup, not in this repository.
+For technical design details (hosted-copy isolation, audio-by-language detection, stream-limit handling, fine sync, and browser test suites), see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

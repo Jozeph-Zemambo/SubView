@@ -1,4 +1,4 @@
-# SubView — Video Sync: Privacy Policy
+# SubView4Dub: Privacy Policy
 
 Last updated: 23 November 2026 (added: automatic reload settings and what a reload puts back; Chrome Web Store copies never check for a new version; a site you turn off keeps its settings)
 
